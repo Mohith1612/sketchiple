@@ -1,0 +1,27 @@
+{
+  "name": "@canvas-draw/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@canvas-draw/shared": "workspace:*",
+    "lib0": "^0.2.93",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.44.0",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.15"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.9",
+    "@types/node": "^20.12.0",
+    "tsx": "^4.7.0",
+    "vitest": "^2.1.9"
+  }
+}
