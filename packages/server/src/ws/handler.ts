@@ -10,8 +10,8 @@ import { newId } from '@canvas-draw/shared'
 import { RoomManager } from '../rooms/RoomManager.js'
 import * as protocol from './protocol.js'
 import * as awarenessProtocol from 'y-protocols/awareness'
-import { createWsRateLimitState, type WsRateLimitState } from './rateLimit.js'
-import { incGauge, setGauge } from '../metrics/metrics.js'
+import { allowWsMessage, createWsRateLimitState, type WsRateLimitState } from './rateLimit.js'
+import { decGauge, incCounter, incGauge, setGauge } from '../metrics/metrics.js'
 import { logger } from '../utils/logger.js'
 
 export interface UserData {
@@ -96,12 +96,43 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       }
     },
 
-    message: (_ws, _message, _isBinary) => {
-      // message + close handlers added next
+    message: (ws, message, _isBinary) => {
+      // MUST copy immediately — uWS recycles this buffer after the callback
+      const data = new Uint8Array(message.slice(0))
+
+      const { roomId, rateLimit } = ws.getUserData()
+      const room = roomManager.getRoom(roomId)
+      if (!room) return
+
+      if (!allowWsMessage(rateLimit)) {
+        incCounter('ws_rate_limit_exceeded_total')
+        logger.warn('ws message rate limit exceeded', { roomId, userId: ws.getUserData().userId })
+        return
+      }
+
+      try {
+        incCounter('ws_messages_received_total')
+        protocol.handleMessage(data, room, ws)
+      } catch (err) {
+        incCounter('ws_message_errors_total')
+        logger.error('ws message error', { roomId, err: String(err) })
+      }
     },
 
-    close: (_ws, _code, _message) => {
-      // close handler added next
+    close: (ws, code, _message) => {
+      const { roomId, userId } = ws.getUserData()
+      const room = roomManager.getRoom(roomId)
+      if (!room) return
+
+      room.removeClient(ws)
+      decGauge('ws_active_sockets', 1)
+      logger.info('ws close', { roomId, userId, code, clients: room.clientCount })
+
+      if (room.isEmpty) {
+        roomManager.deleteRoom(roomId)
+      }
+
+      setGauge('rooms_active', roomManager.size)
     },
   })
 }
