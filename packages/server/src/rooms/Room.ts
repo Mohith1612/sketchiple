@@ -4,19 +4,41 @@ import type { WebSocket } from 'uWebSockets.js'
 import type { UserData } from '../ws/handler.js'
 import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
 import * as encoding from 'lib0/encoding'
+import { incCounter } from '../metrics/metrics.js'
 import { logger } from '../utils/logger.js'
+
+interface BackpressureState {
+  queue: Uint8Array[]
+  droppedCount: number
+}
+
+export interface RoomBackpressureOptions {
+  maxBufferedBytes: number
+  maxQueuedMessages: number
+  drainBatchSize: number
+}
+
+const DEFAULT_BACKPRESSURE_OPTIONS: RoomBackpressureOptions = {
+  maxBufferedBytes: Number(process.env.WS_MAX_BUFFERED_BYTES ?? 256 * 1024),
+  maxQueuedMessages: Number(process.env.WS_MAX_QUEUED_MESSAGES ?? 64),
+  drainBatchSize: Number(process.env.WS_DRAIN_BATCH_SIZE ?? 64),
+}
 
 export class Room {
   readonly roomId: string
   readonly doc: Y.Doc
   readonly awareness: awarenessProtocol.Awareness
   private clients: Set<WebSocket<UserData>>
+  private backpressureByClient: Map<WebSocket<UserData>, BackpressureState>
+  private readonly backpressureOptions: RoomBackpressureOptions
 
-  constructor(roomId: string) {
+  constructor(roomId: string, options?: Partial<RoomBackpressureOptions>) {
     this.roomId = roomId
     this.doc = new Y.Doc()
     this.awareness = new awarenessProtocol.Awareness(this.doc)
     this.clients = new Set()
+    this.backpressureByClient = new Map()
+    this.backpressureOptions = { ...DEFAULT_BACKPRESSURE_OPTIONS, ...options }
 
     this.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
       const changedClients = [...added, ...updated, ...removed]
@@ -27,10 +49,12 @@ export class Room {
 
   addClient(ws: WebSocket<UserData>): void {
     this.clients.add(ws)
+    this.backpressureByClient.set(ws, { queue: [], droppedCount: 0 })
   }
 
   removeClient(ws: WebSocket<UserData>): void {
     this.clients.delete(ws)
+    this.backpressureByClient.delete(ws)
   }
 
   get isEmpty(): boolean {
@@ -49,12 +73,33 @@ export class Room {
   broadcast(message: Uint8Array, exclude?: WebSocket<UserData>): void {
     for (const client of this.clients) {
       if (client === exclude) continue
-      client.send(message, true)
+      this.sendWithBackpressure(client, message)
     }
   }
 
   sendToClient(ws: WebSocket<UserData>, message: Uint8Array): void {
-    ws.send(message, true)
+    this.sendWithBackpressure(ws, message)
+  }
+
+  handleDrain(ws: WebSocket<UserData>): void {
+    const state = this.backpressureByClient.get(ws)
+    if (!state || state.queue.length === 0) return
+
+    let sent = 0
+    while (state.queue.length > 0 && sent < this.backpressureOptions.drainBatchSize) {
+      if (ws.getBufferedAmount() > this.backpressureOptions.maxBufferedBytes) return
+
+      const next = state.queue[0]
+      if (!next) return
+      const sendStatus = ws.send(next, true)
+      if (sendStatus === 1) {
+        state.queue.shift()
+        sent += 1
+        continue
+      }
+
+      if (sendStatus === 0 || sendStatus === 2) return
+    }
   }
 
   broadcastAwareness(awarenessUpdate: Uint8Array): void {
@@ -66,7 +111,45 @@ export class Room {
     this.awareness.destroy()
     this.doc.destroy()
     this.clients.clear()
-    logger.info('room destroyed', { roomId: this.roomId })
+    this.backpressureByClient.clear()
+  }
+
+  private sendWithBackpressure(ws: WebSocket<UserData>, message: Uint8Array): void {
+    const state = this.backpressureByClient.get(ws)
+    if (!state) return
+
+    if (ws.getBufferedAmount() > this.backpressureOptions.maxBufferedBytes) {
+      this.enqueueOrDrop(ws, state, message)
+      return
+    }
+
+    const sendStatus = ws.send(message, true)
+    if (sendStatus === 1) return
+
+    this.enqueueOrDrop(ws, state, message)
+  }
+
+  private enqueueOrDrop(
+    ws: WebSocket<UserData>,
+    state: BackpressureState,
+    message: Uint8Array,
+  ): void {
+    if (state.queue.length >= this.backpressureOptions.maxQueuedMessages) {
+      state.droppedCount += 1
+      incCounter('ws_backpressure_drops_total')
+      if (state.droppedCount % 10 === 0) {
+        const userData = ws.getUserData()
+        logger.warn('ws queue drop due to backpressure', {
+          roomId: this.roomId,
+          userId: userData.userId,
+          droppedCount: state.droppedCount,
+          queueLength: state.queue.length,
+        })
+      }
+      return
+    }
+
+    state.queue.push(message)
   }
 }
 
@@ -75,12 +158,17 @@ function encodeSyncUpdate(update: Uint8Array): Uint8Array {
   encoding.writeVarUint(enc, MSG_SYNC)
   encoding.writeVarUint(enc, 2)
   encoding.writeVarUint8Array(enc, update)
-  return encoding.toUint8Array(enc) as Uint8Array
+  return toUint8ArraySafe(encoding.toUint8Array(enc))
 }
 
 function encodeAwarenessMessage(update: Uint8Array): Uint8Array {
   const enc = encoding.createEncoder()
   encoding.writeVarUint(enc, MSG_AWARENESS)
   encoding.writeVarUint8Array(enc, update)
-  return encoding.toUint8Array(enc) as Uint8Array
+  return toUint8ArraySafe(encoding.toUint8Array(enc))
+}
+
+function toUint8ArraySafe(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value
+  throw new Error('Expected Uint8Array payload')
 }
