@@ -119,6 +119,13 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       }
     },
 
+    drain: (ws) => {
+      const { roomId } = ws.getUserData()
+      const room = roomManager.getRoom(roomId)
+      if (!room) return
+      room.handleDrain(ws)
+    },
+
     close: (ws, code, _message) => {
       const { roomId, userId } = ws.getUserData()
       const room = roomManager.getRoom(roomId)
