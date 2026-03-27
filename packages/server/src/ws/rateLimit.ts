@@ -8,6 +8,9 @@ export interface WsRateLimitConfig {
   refillWindowMs: number
 }
 
+// 300 tokens / 5 s = 60 msgs/sec steady-state refill.
+// Expected peak during active editing: ~31 shape sync + ~30 throttled awareness = ~61/sec.
+// The burst budget (300) absorbs the initial sync handshake without triggering limits.
 export const DEFAULT_WS_RATE_LIMIT: WsRateLimitConfig = {
   maxTokens: 300,
   refillWindowMs: 5000,
