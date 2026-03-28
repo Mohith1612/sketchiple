@@ -8,8 +8,10 @@
 export class CanvasEngine {
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
+  private rafId: number | null = null
   private resizeObserver: ResizeObserver
   private renderCallback: ((ctx: CanvasRenderingContext2D) => void) | null = null
+  private _dirty = true
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -34,6 +36,7 @@ export class CanvasEngine {
     this.canvas.style.height = `${h}px`
 
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    this.requestRender()
   }
 
   get logicalWidth(): number {
@@ -52,7 +55,29 @@ export class CanvasEngine {
     this.renderCallback = fn
   }
 
+  markDirty(): void {
+    this._dirty = true
+  }
+
+  requestRender(): void {
+    this._dirty = true
+    if (this.rafId !== null) return
+    this.rafId = requestAnimationFrame(() => {
+      this.rafId = null
+      if (!this._dirty) return
+      this._dirty = false
+      if (this.renderCallback) {
+        this.ctx.clearRect(0, 0, this.logicalWidth, this.logicalHeight)
+        this.renderCallback(this.ctx)
+      }
+    })
+  }
+
   destroy(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
     this.resizeObserver.disconnect()
   }
 }
