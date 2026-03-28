@@ -5,6 +5,9 @@
  * - requestAnimationFrame loop with FPS/frame-time tracking
  */
 
+/** Module-level perf metrics updated each render frame. Poll from DebugPanel. */
+export const perfState = { fps: 0, frameTimeMs: 0 }
+
 export class CanvasEngine {
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
@@ -12,6 +15,12 @@ export class CanvasEngine {
   private resizeObserver: ResizeObserver
   private renderCallback: ((ctx: CanvasRenderingContext2D) => void) | null = null
   private _dirty = true
+
+  // Rolling 60-frame circular buffer for FPS / frame-time tracking
+  private _frameBuf = new Float32Array(60)
+  private _frameBufIdx = 0
+  private _frameBufFull = false
+  private _lastFrameTs = 0
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -62,15 +71,43 @@ export class CanvasEngine {
   requestRender(): void {
     this._dirty = true
     if (this.rafId !== null) return
-    this.rafId = requestAnimationFrame(() => {
+    this.rafId = requestAnimationFrame((ts) => {
       this.rafId = null
       if (!this._dirty) return
       this._dirty = false
+      this._trackFrame(ts)
       if (this.renderCallback) {
         this.ctx.clearRect(0, 0, this.logicalWidth, this.logicalHeight)
         this.renderCallback(this.ctx)
       }
     })
+  }
+
+  private _trackFrame(ts: number): void {
+    if (this._lastFrameTs > 0) {
+      const delta = ts - this._lastFrameTs
+      this._frameBuf[this._frameBufIdx] = delta
+      this._frameBufIdx = (this._frameBufIdx + 1) % 60
+      if (!this._frameBufFull && this._frameBufIdx === 0) this._frameBufFull = true
+
+      const count = this._frameBufFull ? 60 : this._frameBufIdx
+      if (count > 0) {
+        let sum = 0
+        for (let i = 0; i < count; i++) sum += this._frameBuf[i]!
+        const avg = sum / count
+        perfState.frameTimeMs = Math.round(avg * 10) / 10
+        perfState.fps = avg > 0 ? Math.round(1000 / avg) : 0
+      }
+    }
+    this._lastFrameTs = ts
+  }
+
+  getFps(): number {
+    return perfState.fps
+  }
+
+  getFrameTimeMs(): number {
+    return perfState.frameTimeMs
   }
 
   destroy(): void {
