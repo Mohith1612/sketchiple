@@ -3,6 +3,8 @@ import { CanvasEngine } from './canvas/CanvasEngine.js'
 import { renderScene } from './canvas/CanvasRenderer.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
 
+// Attach wheel handler to canvas for zoom and pan
+
 const TOOLS: { id: Tool; label: string }[] = [
   { id: 'select', label: '↖ Select' },
   { id: 'rect', label: '▭ Rect' },
@@ -26,6 +28,7 @@ const btnBase: React.CSSProperties = {
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const engineRef = useRef<CanvasEngine | null>(null)
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
 
@@ -33,6 +36,7 @@ export function App() {
     const canvas = canvasRef.current
     if (!canvas) return
     const engine = new CanvasEngine(canvas)
+    engineRef.current = engine
 
     engine.setRenderCallback((ctx) => {
       renderScene(ctx, null)
@@ -43,6 +47,40 @@ export function App() {
     return () => {
       engine.destroy()
     }
+  }, [])
+
+  // Wheel zoom / pan
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    function onWheel(e: WheelEvent) {
+      e.preventDefault()
+      const store = useUiStore.getState()
+      store.setFollowing(null)
+      if (e.ctrlKey || e.metaKey) {
+        const rect = canvas!.getBoundingClientRect()
+        const mx = e.clientX - rect.left
+        const my = e.clientY - rect.top
+        const factor = e.deltaY < 0 ? 1.1 : 0.9
+        const newZoom = Math.max(0.1, Math.min(10, store.viewport.zoom * factor))
+        const scale = newZoom / store.viewport.zoom
+        store.setViewport({
+          zoom: newZoom,
+          offsetX: mx - scale * (mx - store.viewport.offsetX),
+          offsetY: my - scale * (my - store.viewport.offsetY),
+        })
+      } else {
+        store.setViewport({
+          offsetX: store.viewport.offsetX - e.deltaX,
+          offsetY: store.viewport.offsetY - e.deltaY,
+        })
+      }
+      engineRef.current?.requestRender()
+    }
+
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
   }, [])
 
   return (
