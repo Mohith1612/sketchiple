@@ -26,6 +26,46 @@ export function renderShape(ctx: CanvasRenderingContext2D, shape: Shape): void {
       break
     }
 
+    case 'arrow': {
+      const pts = shape.points
+      if (!pts) break
+      const [start, end] = pts
+      const [x1, y1] = start
+      const [x2, y2] = end
+      const angle = Math.atan2(y2 - y1, x2 - x1)
+      const headLen = Math.max(12, shape.strokeWidth * 4)
+
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.stroke()
+
+      ctx.beginPath()
+      ctx.moveTo(x2, y2)
+      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6))
+      ctx.moveTo(x2, y2)
+      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6))
+      ctx.stroke()
+      break
+    }
+
+    case 'text': {
+      if (!shape.content) break
+      const fontSize = shape.fontSize ?? 16
+      const fontWeight = shape.fontWeight ?? 'normal'
+      const textAlign = shape.textAlign ?? 'left'
+      ctx.font = `${fontWeight} ${fontSize}px ${shape.fontFamily ?? 'system-ui, sans-serif'}`
+      ctx.fillStyle = shape.stroke
+      ctx.textAlign = textAlign
+      ctx.textBaseline = 'top'
+      const textX = textAlign === 'left' ? shape.x : textAlign === 'center' ? shape.x + shape.width / 2 : shape.x + shape.width
+      const lineH = fontSize * 1.4
+      shape.content.split('\n').forEach((line, i) => {
+        ctx.fillText(line, textX, shape.y + i * lineH)
+      })
+      break
+    }
+
     default:
       break
   }
