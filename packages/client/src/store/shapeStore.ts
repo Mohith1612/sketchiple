@@ -35,7 +35,9 @@ export function initShapeStoreSync(): void {
   void import('../crdt/doc.js').then(({ getShapesMap }) => {
     const shapesMap = getShapesMap()
 
-    shapesMap.observe((event, _transaction) => {
+    shapesMap.observe((event, transaction) => {
+      if (transaction.local) return // ShapeActions already updated Zustand
+
       event.changes.keys.forEach((change, key) => {
         if (change.action === 'add' || change.action === 'update') {
           const shape = shapesMap.get(key)
