@@ -25,3 +25,27 @@ export const useShapeStore = create<ShapeStore>((set) => ({
       return { shapes: next }
     }),
 }))
+
+/**
+ * Wire the Yjs observer → Zustand bridge.
+ * Call once after ydoc is initialized (in main.tsx after persistence.whenSynced).
+ */
+export function initShapeStoreSync(): void {
+  // Lazy import to avoid circular dependency at module load time
+  void import('../crdt/doc.js').then(({ getShapesMap }) => {
+    const shapesMap = getShapesMap()
+
+    shapesMap.observe((event, _transaction) => {
+      event.changes.keys.forEach((change, key) => {
+        if (change.action === 'add' || change.action === 'update') {
+          const shape = shapesMap.get(key)
+          if (shape) {
+            useShapeStore.getState()._upsertShape(shape)
+          }
+        } else if (change.action === 'delete') {
+          useShapeStore.getState()._deleteShape(key)
+        }
+      })
+    })
+  })
+}
