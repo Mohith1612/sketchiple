@@ -37,3 +37,17 @@ export function removeShape(id: string): void {
   useShapeStore.getState()._deleteShape(id)
   invalidateFreehandPath(id)
 }
+
+/**
+ * LOCAL-ONLY update: writes to Zustand only, never touches Yjs.
+ * Use for high-frequency pointermove handling to get 60fps local render
+ * without flooding the network. Always follow with updateShape() or a
+ * throttled Yjs write to persist the final state to peers.
+ *
+ * INVARIANT: Must never call ydoc or getShapesMap().
+ */
+export function updateShapeLocal(id: string, patch: Partial<Omit<Shape, 'id'>>): void {
+  const current = useShapeStore.getState().shapes[id]
+  if (!current) return
+  useShapeStore.getState()._upsertShape({ ...current, ...patch })
+}
