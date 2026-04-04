@@ -7,6 +7,7 @@
  */
 import type { Shape } from '@canvas-draw/shared'
 import { addShape, createShape, updateShape, removeShape } from '../shapes/index.js'
+import { snapToShape } from '../shapes/arrowBinding.js'
 import { useUiStore } from '../../store/uiStore.js'
 import { throttle, type ThrottledFn } from '../../lib/throttle.js'
 
@@ -41,7 +42,7 @@ export function createDrawingHandlers(
 
   function onPointerDown(e: PointerEvent) {
     const tool = useUiStore.getState().activeTool
-    if (tool === 'select' || tool === 'text' || tool === 'pan' || tool === 'arrow' || tool === 'freehand') return
+    if (tool === 'select' || tool === 'text' || tool === 'pan' || tool === 'freehand') return
     e.preventDefault()
     canvas.setPointerCapture(e.pointerId)
 
@@ -59,8 +60,9 @@ export function createDrawingHandlers(
       width: 0,
       height: 0,
       stroke: strokeColor,
-      fill: fillColor,
+      fill: tool === 'arrow' ? 'transparent' : fillColor,
       strokeWidth,
+      ...(tool === 'arrow' ? { points: [[x, y], [x, y]] as [[number, number], [number, number]] } : {}),
     })
     activeDraftId = initialShape.id
     throttledDrawSync = throttle(
@@ -80,13 +82,23 @@ export function createDrawingHandlers(
     setDraft(draft) // instant local render
 
     if (activeDraftId && throttledDrawSync) {
-      const { startX, startY, currentX, currentY } = draft
-      throttledDrawSync(activeDraftId, {
-        x: Math.min(startX, currentX),
-        y: Math.min(startY, currentY),
-        width: Math.abs(currentX - startX),
-        height: Math.abs(currentY - startY),
-      })
+      const { startX, startY, currentX, currentY, type } = draft
+      if (type === 'arrow') {
+        throttledDrawSync(activeDraftId, {
+          x: Math.min(startX, currentX),
+          y: Math.min(startY, currentY),
+          width: Math.abs(currentX - startX),
+          height: Math.abs(currentY - startY),
+          points: [[startX, startY], [currentX, currentY]],
+        })
+      } else {
+        throttledDrawSync(activeDraftId, {
+          x: Math.min(startX, currentX),
+          y: Math.min(startY, currentY),
+          width: Math.abs(currentX - startX),
+          height: Math.abs(currentY - startY),
+        })
+      }
     }
     requestRender()
   }
@@ -95,12 +107,31 @@ export function createDrawingHandlers(
     if (!active || !draft) return
     active = false
 
-    const { startX, startY, currentX, currentY } = draft
+    const { startX, startY, currentX, currentY, type } = draft
     const id = activeDraftId!
     activeDraftId = null
     throttledDrawSync?.flush()
     throttledDrawSync?.cancel()
     throttledDrawSync = null
+
+    if (type === 'arrow') {
+      const { viewport } = useUiStore.getState()
+      const fromSnap = snapToShape(startX, startY, id, viewport.zoom, viewport.offsetX, viewport.offsetY)
+      const toSnap = snapToShape(currentX, currentY, id, viewport.zoom, viewport.offsetX, viewport.offsetY)
+
+      updateShape(id, {
+        x: Math.min(startX, currentX),
+        y: Math.min(startY, currentY),
+        width: Math.abs(currentX - startX),
+        height: Math.abs(currentY - startY),
+        points: [[startX, startY], [currentX, currentY]],
+        ...(fromSnap ? { fromShapeId: fromSnap.shapeId, fromAnchor: fromSnap.anchor } : {}),
+        ...(toSnap ? { toShapeId: toSnap.shapeId, toAnchor: toSnap.anchor } : {}),
+      })
+      setDraft(null)
+      draft = null
+      return
+    }
 
     const width = Math.abs(currentX - startX)
     const height = Math.abs(currentY - startY)
