@@ -34,6 +34,7 @@ export function createDrawingHandlers(
   let draft: DraftShape | null = null
   let activeDraftId: string | null = null
   let throttledDrawSync: ThrottledFn<[string, Parameters<typeof updateShape>[1]]> | null = null
+  let panStart: { sx: number; sy: number; ox: number; oy: number } | null = null
 
   function getWorldPos(e: PointerEvent) {
     const rect = canvas.getBoundingClientRect()
@@ -42,9 +43,25 @@ export function createDrawingHandlers(
     return useUiStore.getState().screenToWorld(sx, sy)
   }
 
+  function getScreenPos(e: PointerEvent) {
+    const rect = canvas.getBoundingClientRect()
+    return { sx: e.clientX - rect.left, sy: e.clientY - rect.top }
+  }
+
   function onPointerDown(e: PointerEvent) {
     const tool = useUiStore.getState().activeTool
-    if (tool === 'select' || tool === 'text' || tool === 'pan') return
+    if (tool === 'select' || tool === 'text') return
+    if (tool === 'pan') {
+      e.preventDefault()
+      const { sx, sy } = getScreenPos(e)
+      const { viewport } = useUiStore.getState()
+      panStart = { sx, sy, ox: viewport.offsetX, oy: viewport.offsetY }
+      canvas.setPointerCapture(e.pointerId)
+      canvas.style.cursor = 'grabbing'
+      // Local pan breaks follow mode
+      useUiStore.getState().setFollowing(null)
+      return
+    }
     e.preventDefault()
     canvas.setPointerCapture(e.pointerId)
 
@@ -84,6 +101,15 @@ export function createDrawingHandlers(
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (panStart) {
+      const { sx, sy } = getScreenPos(e)
+      useUiStore.getState().setViewport({
+        offsetX: panStart.ox + (sx - panStart.sx),
+        offsetY: panStart.oy + (sy - panStart.sy),
+      })
+      requestRender()
+      return
+    }
     if (!active || !draft) return
     const { x, y } = getWorldPos(e)
 
@@ -120,6 +146,11 @@ export function createDrawingHandlers(
   }
 
   function onPointerUp() {
+    if (panStart) {
+      panStart = null
+      canvas.style.cursor = 'grab'
+      return
+    }
     if (!active || !draft) return
     active = false
 
