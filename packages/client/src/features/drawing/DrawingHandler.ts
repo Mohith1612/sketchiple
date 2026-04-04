@@ -9,6 +9,8 @@ import type { Shape } from '@canvas-draw/shared'
 import { addShape, createShape, updateShape, removeShape } from '../shapes/index.js'
 import { snapToShape } from '../shapes/arrowBinding.js'
 import { useUiStore } from '../../store/uiStore.js'
+import { rdp } from '../../lib/rdp.js'
+import { getBoundingBox } from '../../lib/boundingBox.js'
 import { throttle, type ThrottledFn } from '../../lib/throttle.js'
 
 export interface DraftShape {
@@ -42,12 +44,19 @@ export function createDrawingHandlers(
 
   function onPointerDown(e: PointerEvent) {
     const tool = useUiStore.getState().activeTool
-    if (tool === 'select' || tool === 'text' || tool === 'pan' || tool === 'freehand') return
+    if (tool === 'select' || tool === 'text' || tool === 'pan') return
     e.preventDefault()
     canvas.setPointerCapture(e.pointerId)
 
     const { x, y } = getWorldPos(e)
     active = true
+
+    // Freehand: collect raw points locally — no Yjs write until pointerup
+    if (tool === 'freehand') {
+      draft = { type: 'freehand', startX: x, startY: y, currentX: x, currentY: y, rawPoints: [[x, y]] }
+      setDraft(draft)
+      return
+    }
 
     draft = { type: tool, startX: x, startY: y, currentX: x, currentY: y }
 
@@ -78,6 +87,13 @@ export function createDrawingHandlers(
     if (!active || !draft) return
     const { x, y } = getWorldPos(e)
 
+    // Freehand: accumulate raw points locally — no Yjs writes during drawing
+    if (draft.type === 'freehand' && draft.rawPoints) {
+      draft = { ...draft, currentX: x, currentY: y, rawPoints: [...draft.rawPoints, [x, y]] }
+      setDraft(draft)
+      return
+    }
+
     draft = { ...draft, currentX: x, currentY: y }
     setDraft(draft) // instant local render
 
@@ -106,6 +122,29 @@ export function createDrawingHandlers(
   function onPointerUp() {
     if (!active || !draft) return
     active = false
+
+    // Freehand: single Yjs commit after RDP simplification
+    if (draft.type === 'freehand' && draft.rawPoints) {
+      const rawPoints = draft.rawPoints
+      const simplified = rawPoints.length >= 3 ? rdp(rawPoints, 2) : rawPoints
+      const bbox = getBoundingBox({ type: 'freehand', freehandPoints: simplified } as Shape)
+      const { strokeColor, strokeWidth } = useUiStore.getState()
+      const shape = createShape({
+        type: 'freehand',
+        x: bbox.x,
+        y: bbox.y,
+        width: bbox.width,
+        height: bbox.height,
+        stroke: strokeColor,
+        fill: 'transparent',
+        strokeWidth,
+        freehandPoints: simplified,
+      })
+      addShape(shape)
+      setDraft(null)
+      draft = null
+      return
+    }
 
     const { startX, startY, currentX, currentY, type } = draft
     const id = activeDraftId!
