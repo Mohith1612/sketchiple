@@ -3,6 +3,7 @@
  * Renders: background → shapes → draft → selection overlay → remote cursors
  */
 import { renderShape } from '../features/shapes/ShapeRenderer.js'
+import { renderDraft } from '../features/drawing/DraftRenderer.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
 import { getBoundingBox } from '../lib/boundingBox.js'
@@ -30,9 +31,12 @@ export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | n
     renderShape(ctx, shape)
   }
 
-  ctx.restore()
+  // Render in-progress draft
+  if (draft) {
+    renderDraft(ctx, draft)
+  }
 
-  void draft // draft rendering added later
+  ctx.restore()
 }
 
 function isShapeVisible(
