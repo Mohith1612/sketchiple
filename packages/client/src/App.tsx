@@ -1,6 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CanvasEngine } from './canvas/CanvasEngine.js'
 import { renderScene } from './canvas/CanvasRenderer.js'
+import { createDrawingHandlers } from './features/drawing/index.js'
+import type { DraftShape } from './features/drawing/index.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
 
 // Attach wheel handler to canvas for zoom and pan
@@ -29,8 +31,12 @@ const btnBase: React.CSSProperties = {
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<CanvasEngine | null>(null)
+  const [draft, setDraft] = useState<DraftShape | null>(null)
+  const draftRef = useRef<DraftShape | null>(null)
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
+
+  draftRef.current = draft
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -39,15 +45,27 @@ export function App() {
     engineRef.current = engine
 
     engine.setRenderCallback((ctx) => {
-      renderScene(ctx, null)
+      renderScene(ctx, draftRef.current)
     })
+
+    const cleanupDrawing = createDrawingHandlers(
+      canvas,
+      (d) => setDraft(d),
+      () => engine.requestRender(),
+    )
 
     engine.requestRender()
 
     return () => {
+      cleanupDrawing()
       engine.destroy()
     }
   }, [])
+
+  // Re-render whenever store state changes
+  useEffect(() => {
+    engineRef.current?.requestRender()
+  })
 
   // Wheel zoom / pan
   useEffect(() => {
