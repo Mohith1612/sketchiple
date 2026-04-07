@@ -119,9 +119,46 @@ class YjsWebSocketProvider {
       this.handleIncoming(new Uint8Array(event.data))
     }
 
+    ws.onclose = () => {
+      this.ws = null
+      if (this.destroyed) return
+      this.setState('DISCONNECTED')
+      this.scheduleReconnect()
+    }
+
     ws.onerror = (err) => {
       console.warn('[ws] error:', err)
     }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer !== null) return
+    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      console.warn('[ws] reconnect attempts exhausted', {
+        roomId: this.roomId,
+        maxAttempts: this.maxReconnectAttempts,
+      })
+      return
+    }
+
+    this.reconnectAttempt += 1
+    const delay = computeJitteredBackoffMs(
+      this.reconnectAttempt,
+      this.baseDelay,
+      this.maxDelay,
+      this.jitterRatio,
+    )
+
+    console.debug('[ws] disconnected, reconnecting in', delay, 'ms', {
+      roomId: this.roomId,
+      attempt: this.reconnectAttempt,
+      maxAttempts: this.maxReconnectAttempts,
+    })
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this._connect()
+    }, delay)
   }
 
   private handleIncoming(data: Uint8Array): void {
@@ -169,6 +206,19 @@ class YjsWebSocketProvider {
     this.ws?.close()
     this.awareness.destroy()
   }
+}
+
+export function computeJitteredBackoffMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  jitterRatio: number,
+  random: number = Math.random(),
+): number {
+  const exp = Math.max(0, attempt - 1)
+  const base = Math.min(maxDelayMs, baseDelayMs * 2 ** exp)
+  const jitterMultiplier = 1 - jitterRatio + random * 2 * jitterRatio
+  return Math.max(0, Math.floor(base * jitterMultiplier))
 }
 
 function encodeSyncStep1(): Uint8Array {
