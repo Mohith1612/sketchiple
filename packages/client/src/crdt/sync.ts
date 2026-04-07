@@ -7,6 +7,10 @@
  * CRITICAL: ws.binaryType = 'arraybuffer' must be set before the first message.
  * Without it the browser defaults to 'blob' and binary data is silently garbled.
  */
+import * as syncProtocol from 'y-protocols/sync'
+import * as awarenessProtocol from 'y-protocols/awareness'
+import * as encoding from 'lib0/encoding'
+import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
 import { ydoc } from './doc.js'
 
 export type WsState = 'DISCONNECTED' | 'CONNECTING' | 'HANDSHAKING' | 'SYNCED'
@@ -26,12 +30,31 @@ class YjsWebSocketProvider {
   private _state: WsState = 'DISCONNECTED'
   private stateListeners: Set<StateListener> = new Set()
 
+  awareness: awarenessProtocol.Awareness
+
   constructor() {
     const rawMaxRetries: unknown = import.meta.env.VITE_WS_MAX_RETRIES
     const parsedMaxRetries = typeof rawMaxRetries === 'string' ? Number(rawMaxRetries) : NaN
     this.maxReconnectAttempts = Number.isFinite(parsedMaxRetries) && parsedMaxRetries > 0
       ? Math.floor(parsedMaxRetries)
       : 20
+
+    this.awareness = new awarenessProtocol.Awareness(ydoc)
+
+    // When local awareness changes, send to server
+    this.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+      const changedClients = [...added, ...updated, ...removed]
+      const update = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
+      this.ws.send(encodeAwareness(update))
+    })
+
+    // When doc gets a local update, send to server
+    ydoc.on('update', (update: Uint8Array, origin: unknown) => {
+      if (origin === this) return
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+      this.ws.send(encodeSyncUpdate(update))
+    })
   }
 
   get state(): WsState {
@@ -81,6 +104,14 @@ class YjsWebSocketProvider {
     const ws = new WebSocket(wsUrl)
     this.ws = ws
 
+    ws.onopen = () => {
+      this.reconnectAttempt = 0
+      this.setState('HANDSHAKING')
+      console.debug('[ws] connected, awaiting syncStep1 from server', { roomId: this.roomId })
+      // Send our syncStep1 so the server knows what state vector we have
+      this.ws?.send(encodeSyncStep1())
+    }
+
     ws.onerror = (err) => {
       console.warn('[ws] error:', err)
     }
@@ -94,8 +125,39 @@ class YjsWebSocketProvider {
     }
     this.reconnectAttempt = 0
     this.ws?.close()
+    this.awareness.destroy()
   }
 }
+
+function encodeSyncStep1(): Uint8Array {
+  const enc = encoding.createEncoder()
+  encoding.writeVarUint(enc, MSG_SYNC)
+  syncProtocol.writeSyncStep1(enc, ydoc)
+  return toUint8ArraySafe(encoding.toUint8Array(enc))
+}
+
+function encodeSyncUpdate(update: Uint8Array): Uint8Array {
+  const enc = encoding.createEncoder()
+  encoding.writeVarUint(enc, MSG_SYNC)
+  encoding.writeVarUint(enc, 2) // messageYjsUpdate
+  encoding.writeVarUint8Array(enc, update)
+  return toUint8ArraySafe(encoding.toUint8Array(enc))
+}
+
+function encodeAwareness(update: Uint8Array): Uint8Array {
+  const enc = encoding.createEncoder()
+  encoding.writeVarUint(enc, MSG_AWARENESS)
+  encoding.writeVarUint8Array(enc, update)
+  return toUint8ArraySafe(encoding.toUint8Array(enc))
+}
+
+function toUint8ArraySafe(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value
+  throw new Error('Expected Uint8Array payload')
+}
+
+// Suppress unused variable warning — used when MSG_AWARENESS handling lands
+void MSG_AWARENESS
 
 function buildWsUrl(roomId: string): string {
   const rawBase: unknown = import.meta.env.VITE_WS_URL
@@ -104,8 +166,5 @@ function buildWsUrl(roomId: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}/ws/${roomId}`
 }
-
-// Suppress unused import warning — ydoc is used in later commits
-void ydoc
 
 export const wsProvider = new YjsWebSocketProvider()
