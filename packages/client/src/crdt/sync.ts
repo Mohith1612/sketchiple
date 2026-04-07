@@ -10,8 +10,11 @@
 import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
+import * as decoding from 'lib0/decoding'
 import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
-import { ydoc } from './doc.js'
+import type { Shape } from '@canvas-draw/shared'
+import { ydoc, getShapesMap } from './doc.js'
+import { useShapeStore } from '../store/shapeStore.js'
 
 export type WsState = 'DISCONNECTED' | 'CONNECTING' | 'HANDSHAKING' | 'SYNCED'
 
@@ -112,8 +115,47 @@ class YjsWebSocketProvider {
       this.ws?.send(encodeSyncStep1())
     }
 
+    ws.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      this.handleIncoming(new Uint8Array(event.data))
+    }
+
     ws.onerror = (err) => {
       console.warn('[ws] error:', err)
+    }
+  }
+
+  private handleIncoming(data: Uint8Array): void {
+    const dec = decoding.createDecoder(data)
+    const msgType = decoding.readVarUint(dec)
+
+    if (msgType === MSG_SYNC) {
+      const replyEnc = encoding.createEncoder()
+      encoding.writeVarUint(replyEnc, MSG_SYNC)
+
+      const syncMsgTypeRaw: unknown = syncProtocol.readSyncMessage(dec, replyEnc, ydoc, this)
+      const syncMsgType = typeof syncMsgTypeRaw === 'number' ? syncMsgTypeRaw : -1
+
+      if (encoding.length(replyEnc) > 1) {
+        this.ws?.send(toUint8ArraySafe(encoding.toUint8Array(replyEnc)))
+      }
+
+      if (syncMsgType === 0) {
+        const ourStep1 = encodeSyncStep1()
+        this.ws?.send(ourStep1)
+      }
+
+      if (syncMsgType === 1) {
+        this.setState('SYNCED')
+        console.debug('[ws] sync complete', { roomId: this.roomId, shapes: getShapesMap().size })
+        const shapes: Record<string, Shape> = {}
+        for (const [id, shape] of getShapesMap().entries()) {
+          shapes[id] = shape
+        }
+        useShapeStore.getState()._setShapes(shapes)
+      }
+    } else if (msgType === MSG_AWARENESS) {
+      const update = toUint8ArraySafe(decoding.readVarUint8Array(dec))
+      awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this)
     }
   }
 
@@ -155,9 +197,6 @@ function toUint8ArraySafe(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value
   throw new Error('Expected Uint8Array payload')
 }
-
-// Suppress unused variable warning — used when MSG_AWARENESS handling lands
-void MSG_AWARENESS
 
 function buildWsUrl(roomId: string): string {
   const rawBase: unknown = import.meta.env.VITE_WS_URL
