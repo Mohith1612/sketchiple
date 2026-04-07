@@ -15,6 +15,8 @@ import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
 import type { Shape } from '@canvas-draw/shared'
 import { ydoc, getShapesMap } from './doc.js'
 import { useShapeStore } from '../store/shapeStore.js'
+import { useUiStore } from '../store/uiStore.js'
+import { usePresenceStore } from '../store/presenceStore.js'
 
 export type WsState = 'DISCONNECTED' | 'CONNECTING' | 'HANDSHAKING' | 'SYNCED'
 
@@ -67,6 +69,7 @@ class YjsWebSocketProvider {
   private setState(s: WsState): void {
     this._state = s
     this.stateListeners.forEach((fn) => fn(s))
+    useUiStore.getState().setWsState(s)
   }
 
   onStateChange(fn: StateListener): () => void {
@@ -85,6 +88,12 @@ class YjsWebSocketProvider {
     this.destroyed = false
     this.roomId = roomId
     this.reconnectAttempt = 0
+    useUiStore.getState().setWsReconnectMeta({
+      attempt: 0,
+      nextRetryMs: null,
+      maxAttempts: this.maxReconnectAttempts,
+      exhausted: false,
+    })
     this._connect()
   }
 
@@ -110,6 +119,12 @@ class YjsWebSocketProvider {
     ws.onopen = () => {
       this.reconnectAttempt = 0
       this.setState('HANDSHAKING')
+      useUiStore.getState().setWsReconnectMeta({
+        attempt: 0,
+        nextRetryMs: null,
+        maxAttempts: this.maxReconnectAttempts,
+        exhausted: false,
+      })
       console.debug('[ws] connected, awaiting syncStep1 from server', { roomId: this.roomId })
       // Send our syncStep1 so the server knows what state vector we have
       this.ws?.send(encodeSyncStep1())
@@ -123,6 +138,8 @@ class YjsWebSocketProvider {
       this.ws = null
       if (this.destroyed) return
       this.setState('DISCONNECTED')
+      awarenessProtocol.removeAwarenessStates(this.awareness, [ydoc.clientID], 'disconnect')
+      usePresenceStore.getState().clearAll()
       this.scheduleReconnect()
     }
 
@@ -134,6 +151,12 @@ class YjsWebSocketProvider {
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return
     if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      useUiStore.getState().setWsReconnectMeta({
+        attempt: this.reconnectAttempt,
+        nextRetryMs: null,
+        maxAttempts: this.maxReconnectAttempts,
+        exhausted: true,
+      })
       console.warn('[ws] reconnect attempts exhausted', {
         roomId: this.roomId,
         maxAttempts: this.maxReconnectAttempts,
@@ -149,6 +172,13 @@ class YjsWebSocketProvider {
       this.jitterRatio,
     )
 
+    useUiStore.getState().setWsReconnectMeta({
+      attempt: this.reconnectAttempt,
+      nextRetryMs: delay,
+      maxAttempts: this.maxReconnectAttempts,
+      exhausted: false,
+    })
+
     console.debug('[ws] disconnected, reconnecting in', delay, 'ms', {
       roomId: this.roomId,
       attempt: this.reconnectAttempt,
@@ -157,6 +187,12 @@ class YjsWebSocketProvider {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
+      useUiStore.getState().setWsReconnectMeta({
+        attempt: this.reconnectAttempt,
+        nextRetryMs: null,
+        maxAttempts: this.maxReconnectAttempts,
+        exhausted: false,
+      })
       this._connect()
     }, delay)
   }
@@ -203,6 +239,12 @@ class YjsWebSocketProvider {
       this.reconnectTimer = null
     }
     this.reconnectAttempt = 0
+    useUiStore.getState().setWsReconnectMeta({
+      attempt: 0,
+      nextRetryMs: null,
+      maxAttempts: this.maxReconnectAttempts,
+      exhausted: false,
+    })
     this.ws?.close()
     this.awareness.destroy()
   }
