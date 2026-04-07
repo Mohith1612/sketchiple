@@ -4,6 +4,16 @@ import { renderScene } from './canvas/CanvasRenderer.js'
 import { createDrawingHandlers } from './features/drawing/index.js'
 import type { DraftShape } from './features/drawing/index.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
+import { wsProvider } from './crdt/sync.js'
+import { newId } from './lib/uuid.js'
+
+function getRoomId(): string {
+  const hash = window.location.hash.slice(1)
+  if (hash) return hash
+  const id = newId()
+  window.location.hash = id
+  return id
+}
 
 // Attach wheel handler to canvas for zoom and pan
 
@@ -53,6 +63,9 @@ export function App() {
       (d) => setDraft(d),
       () => engine.requestRender(),
     )
+
+    const roomId = getRoomId()
+    wsProvider.connect(roomId)
 
     engine.requestRender()
 
