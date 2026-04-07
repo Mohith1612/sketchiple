@@ -114,6 +114,7 @@ class YjsWebSocketProvider {
 
     const wsUrl = buildWsUrl(this.roomId)
     const ws = new WebSocket(wsUrl)
+    ws.binaryType = 'arraybuffer' // REQUIRED — default 'blob' corrupts binary data
     this.ws = ws
 
     ws.onopen = () => {
