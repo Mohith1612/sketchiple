@@ -97,7 +97,8 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
     },
 
     message: (ws, message, _isBinary) => {
-      // MUST copy immediately — uWS recycles this buffer after the callback
+      // slice(0) creates an independent copy — uWS recycles the original buffer
+      // the moment this callback returns, so any deferred read would be garbage.
       const data = new Uint8Array(message.slice(0))
 
       const { roomId, rateLimit } = ws.getUserData()
