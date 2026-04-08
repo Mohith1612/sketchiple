@@ -6,6 +6,7 @@ import type { DraftShape } from './features/drawing/index.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
+import { undoManager } from './crdt/undoManager.js'
 
 function getRoomId(): string {
   const hash = window.location.hash.slice(1)
@@ -79,6 +80,26 @@ export function App() {
   useEffect(() => {
     engineRef.current?.requestRender()
   })
+
+  // Undo / Redo keyboard shortcuts
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const meta = e.ctrlKey || e.metaKey
+      if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+      if (meta && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undoManager.undo()
+        return
+      }
+      if ((meta && e.shiftKey && e.key === 'z') || (meta && e.key === 'y')) {
+        e.preventDefault()
+        undoManager.redo()
+        return
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   // Wheel zoom / pan
   useEffect(() => {
