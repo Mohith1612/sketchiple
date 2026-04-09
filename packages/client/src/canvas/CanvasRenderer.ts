@@ -1,14 +1,51 @@
 /**
  * CanvasRenderer — orchestrates the full scene render each RAF frame.
  * Renders: background → shapes → draft → selection overlay → remote cursors
+ *
+ * Remote smoothing: lerp interpolation (factor 0.25) is applied to shapes
+ * that are being moved by remote peers, eliminating discrete-update jitter.
+ * Local shapes always render at exact position.
  */
-import { renderShape } from '../features/shapes/ShapeRenderer.js'
+import { renderShape, invalidateFreehandPath } from '../features/shapes/ShapeRenderer.js'
 import { renderDraft } from '../features/drawing/DraftRenderer.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
 import { getBoundingBox } from '../lib/boundingBox.js'
 import type { DraftShape } from '../features/drawing/DrawingHandler.js'
 import type { Shape } from '@canvas-draw/shared'
+
+// ---------------------------------------------------------------------------
+// Remote lerp state — module-level, never goes in Zustand
+// ---------------------------------------------------------------------------
+
+const _remotePos = new Map<string, { x: number; y: number }>()
+const LERP = 0.25
+
+/** Called by shapeStore observer when a remote delete happens. */
+export function clearRemoteLerpPos(id: string): void {
+  _remotePos.delete(id)
+  invalidateFreehandPath(id)
+}
+
+/** Mark a shape as being updated remotely so lerp kicks in next frame. */
+export function markRemoteUpdate(id: string, x: number, y: number): void {
+  if (_remotePos.has(id)) {
+    _remotePos.set(id, { x, y })
+  } else {
+    // First remote update: seed with target so first frame snaps
+    _remotePos.set(id, { x, y })
+  }
+}
+
+function lerpRemoteShape(shape: Shape): Shape {
+  const target = _remotePos.get(shape.id)
+  if (!target) return shape
+  const cur = target
+  const lx = cur.x + (shape.x - cur.x) * LERP
+  const ly = cur.y + (shape.y - cur.y) * LERP
+  _remotePos.set(shape.id, { x: lx, y: ly })
+  return { ...shape, x: lx, y: ly }
+}
 
 export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | null): void {
   const { shapes } = useShapeStore.getState()
@@ -24,11 +61,13 @@ export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | n
   ctx.translate(offsetX, offsetY)
   ctx.scale(zoom, zoom)
 
+  // Render committed shapes — cull those outside viewport, lerp remote shapes
   const canvasW = ctx.canvas.clientWidth
   const canvasH = ctx.canvas.clientHeight
   for (const shape of Object.values(shapes)) {
     if (!isShapeVisible(shape, zoom, offsetX, offsetY, canvasW, canvasH)) continue
-    renderShape(ctx, shape)
+    const s = _remotePos.has(shape.id) ? lerpRemoteShape(shape) : shape
+    renderShape(ctx, s)
   }
 
   // Render in-progress draft
