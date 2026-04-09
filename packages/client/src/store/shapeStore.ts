@@ -43,9 +43,20 @@ export function initShapeStoreSync(): void {
           const shape = shapesMap.get(key)
           if (shape) {
             useShapeStore.getState()._upsertShape(shape)
+            // Mark for lerp smoothing (lazy import avoids circular deps at load time)
+            void import('../canvas/CanvasRenderer.js').then(({ markRemoteUpdate }) => {
+              markRemoteUpdate(shape.id, shape.x, shape.y)
+            })
           }
         } else if (change.action === 'delete') {
           useShapeStore.getState()._deleteShape(key)
+          // Purge deleted shape from selection and lerp cache
+          void import('../features/selection/selectionStore.js').then(({ useSelectionStore }) => {
+            useSelectionStore.getState().removeFromSelection(key)
+          })
+          void import('../canvas/CanvasRenderer.js').then(({ clearRemoteLerpPos }) => {
+            clearRemoteLerpPos(key)
+          })
         }
       })
     })
