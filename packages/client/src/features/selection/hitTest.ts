@@ -29,11 +29,39 @@ export function hitTestPoint(shape: Shape, wx: number, wy: number): boolean {
         wy <= shape.y + (shape.height || 40)
       )
 
-    // arrow and freehand added next
-    case 'arrow':
-    case 'freehand':
+    case 'arrow': {
+      const pts = shape.points
+      if (!pts) return false
+      const [p0, p1] = pts
+      const tolerance = shape.strokeWidth / 2 + 6
+      return distPointToSegment(wx, wy, p0[0], p0[1], p1[0], p1[1]) <= tolerance
+    }
+
+    case 'freehand': {
+      const bb = getBoundingBox(shape)
+      if (wx < bb.x || wx > bb.x + bb.width || wy < bb.y || wy > bb.y + bb.height) return false
+      const threshold = Math.max(5, shape.strokeWidth + 4)
+      const pts = shape.freehandPoints ?? []
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (distPointToSegment(wx, wy, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]) <= threshold)
+          return true
+      }
       return false
+    }
   }
+}
+
+export function distPointToSegment(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const lenSq = dx * dx + dy * dy
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay)
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq))
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
 }
 
 /**
@@ -53,5 +81,3 @@ export function hitTestShapes(
   return null
 }
 
-// Placeholder for getBoundingBox usage in freehand (added in commit 87)
-void getBoundingBox
