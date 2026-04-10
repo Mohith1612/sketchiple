@@ -19,6 +19,8 @@
 import type { Shape } from '@canvas-draw/shared'
 import {
   hitTestShapes,
+  hitTestHandle,
+  getResizeAnchor,
   type ResizeHandle,
 } from './hitTest.js'
 import { useSelectionStore } from './selectionStore.js'
@@ -37,6 +39,18 @@ const HANDLE_CURSORS: Record<ResizeHandle, string> = {
 // Suppress unused warning — used in later commits
 void HANDLE_CURSORS
 
+const MIN_SIZE = 10
+
+interface ResizeState {
+  handle: ResizeHandle
+  shapeId: string
+  ax: number
+  ay: number
+  origW: number
+  origH: number
+  throttledYjs: ThrottledFn<[string, Partial<Shape>]>
+}
+
 interface MoveState {
   startSx: number
   startSy: number
@@ -51,7 +65,8 @@ interface MoveState {
 
 type Interaction =
   | { type: 'idle' }
-  | { type: 'move'; state: MoveState }
+  | { type: 'move';   state: MoveState }
+  | { type: 'resize'; state: ResizeState }
 
 export function createSelectionHandlers(
   canvas: HTMLCanvasElement,
@@ -74,10 +89,38 @@ export function createSelectionHandlers(
     e.preventDefault()
 
     const { sx, sy } = getScreenPos(e)
-    const { screenToWorld } = useUiStore.getState()
+    const { screenToWorld, viewport: vp } = useUiStore.getState()
     const { x: wx, y: wy } = screenToWorld(sx, sy)
     const { shapes } = useShapeStore.getState()
     const { selectedIds } = useSelectionStore.getState()
+
+    // --- Priority 1: resize handles on selected resizable shapes ---
+    for (const id of selectedIds) {
+      const shape = shapes[id]
+      if (!shape || shape.type === 'arrow' || shape.type === 'text' || shape.type === 'freehand') continue
+      const handle = hitTestHandle(shape, sx, sy, vp)
+      if (handle) {
+        canvas.setPointerCapture(e.pointerId)
+        const { ax, ay } = getResizeAnchor(shape, handle)
+        interaction = {
+          type: 'resize',
+          state: {
+            handle,
+            shapeId: id,
+            ax, ay,
+            origW: shape.width,
+            origH: shape.height,
+            throttledYjs: throttle(
+              (sid: string, patch: Partial<Shape>) => updateShape(sid, patch),
+              32,
+              { leading: true, trailing: true },
+            ),
+          },
+        }
+        setCursor(HANDLE_CURSORS[handle])
+        return
+      }
+    }
 
     // Shape body hit
     const hit = hitTestShapes(shapes, wx, wy)
@@ -132,6 +175,17 @@ export function createSelectionHandlers(
     const { sx, sy } = getScreenPos(e)
     const { screenToWorld } = useUiStore.getState()
 
+    // Resize drag
+    if (interaction.type === 'resize') {
+      const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const patch = applyResize(handle, ax, ay, origW, origH, wx, wy, e.shiftKey)
+      updateShapeLocal(shapeId, patch)
+      throttledYjs(shapeId, patch)
+      requestRender()
+      return
+    }
+
     // Move drag
     if (interaction.type === 'move') {
       const { startSx, startSy, initialPositions, throttledYjs } = interaction.state
@@ -173,8 +227,20 @@ export function createSelectionHandlers(
     setCursor(hit ? 'move' : 'default')
   }
 
-  function onPointerUp(_e: PointerEvent) {
+  function onPointerUp(e: PointerEvent) {
     if (useUiStore.getState().activeTool !== 'select') return
+
+    const { sx, sy } = getScreenPos(e)
+    const { screenToWorld } = useUiStore.getState()
+
+    if (interaction.type === 'resize') {
+      const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const finalPatch = applyResize(handle, ax, ay, origW, origH, wx, wy, e.shiftKey)
+      throttledYjs.flush()
+      throttledYjs.cancel()
+      updateShape(shapeId, finalPatch)
+    }
 
     if (interaction.type === 'move') {
       const { throttledYjs } = interaction.state
@@ -196,4 +262,50 @@ export function createSelectionHandlers(
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerup', onPointerUp)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resize math — no-flip + min-size + optional aspect-ratio lock
+// ---------------------------------------------------------------------------
+
+function applyResize(
+  handle: ResizeHandle,
+  ax: number,
+  ay: number,
+  origW: number,
+  origH: number,
+  wx: number,
+  wy: number,
+  shiftLock: boolean,
+): Partial<Shape> {
+  let newX: number, newY: number, newW: number, newH: number
+
+  switch (handle) {
+    case 'nw':
+      newX = Math.min(ax - MIN_SIZE, wx); newY = Math.min(ay - MIN_SIZE, wy)
+      newW = ax - newX;                   newH = ay - newY
+      break
+    case 'ne':
+      newX = ax;                          newY = Math.min(ay - MIN_SIZE, wy)
+      newW = Math.max(MIN_SIZE, wx - ax); newH = ay - newY
+      break
+    case 'sw':
+      newX = Math.min(ax - MIN_SIZE, wx); newY = ay
+      newW = ax - newX;                   newH = Math.max(MIN_SIZE, wy - ay)
+      break
+    default: // se
+      newX = ax;                          newY = ay
+      newW = Math.max(MIN_SIZE, wx - ax); newH = Math.max(MIN_SIZE, wy - ay)
+  }
+
+  if (shiftLock && origW > 0 && origH > 0) {
+    const ratio = origW / origH
+    if (Math.abs(newW - origW) >= Math.abs(newH - origH)) {
+      newH = Math.max(MIN_SIZE, newW / ratio)
+    } else {
+      newW = Math.max(MIN_SIZE, newH * ratio)
+    }
+  }
+
+  return { x: newX, y: newY, width: newW, height: newH }
 }
