@@ -3,6 +3,7 @@ import { CanvasEngine } from './canvas/CanvasEngine.js'
 import { renderScene } from './canvas/CanvasRenderer.js'
 import { createDrawingHandlers } from './features/drawing/index.js'
 import type { DraftShape } from './features/drawing/index.js'
+import { createSelectionHandlers } from './features/selection/SelectionHandler.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
@@ -65,6 +66,8 @@ export function App() {
       () => engine.requestRender(),
     )
 
+    const cleanupSelection = createSelectionHandlers(canvas, () => engine.requestRender())
+
     const roomId = getRoomId()
     wsProvider.connect(roomId)
 
@@ -72,6 +75,7 @@ export function App() {
 
     return () => {
       cleanupDrawing()
+      cleanupSelection()
       engine.destroy()
     }
   }, [])
