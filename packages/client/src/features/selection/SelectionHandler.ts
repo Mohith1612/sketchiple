@@ -37,8 +37,6 @@ const HANDLE_CURSORS: Record<ResizeHandle, string> = {
   se: 'se-resize',
 }
 
-// Suppress unused warning — used in later commits
-void HANDLE_CURSORS
 
 const MIN_SIZE = 10
 
@@ -224,7 +222,7 @@ export function createSelectionHandlers(
   function onPointerMove(e: PointerEvent) {
     if (useUiStore.getState().activeTool !== 'select') return
     const { sx, sy } = getScreenPos(e)
-    const { screenToWorld } = useUiStore.getState()
+    const { screenToWorld, viewport: vp } = useUiStore.getState()
 
     // Rubber-band
     if (interaction.type === 'rubber-band') {
@@ -303,10 +301,37 @@ export function createSelectionHandlers(
       return
     }
 
-    const { x: wx, y: wy } = screenToWorld(sx, sy)
+    // --- Idle: hover cursor feedback ---
     const { shapes } = useShapeStore.getState()
+    const { selectedIds } = useSelectionStore.getState()
+    const { x: wx, y: wy } = screenToWorld(sx, sy)
 
-    // Idle hover feedback
+    // Check group resize handles (multi-select)
+    if (selectedIds.size >= 2) {
+      const groupBBox = computeGroupBBox(selectedIds, shapes)
+      if (groupBBox) {
+        const handle = hitTestGroupHandle(groupBBox, sx, sy, vp)
+        if (handle) {
+          setCursor(HANDLE_CURSORS[handle])
+          useUiStore.getState().setHoveredId(null)
+          return
+        }
+      }
+    }
+
+    // Check resize handles
+    for (const id of selectedIds) {
+      const shape = shapes[id]
+      if (!shape || shape.type === 'arrow' || shape.type === 'text' || shape.type === 'freehand') continue
+      const handle = hitTestHandle(shape, sx, sy, vp)
+      if (handle) {
+        setCursor(HANDLE_CURSORS[handle])
+        useUiStore.getState().setHoveredId(null)
+        return
+      }
+    }
+
+    // Check shape body
     const hit = hitTestShapes(shapes, wx, wy)
     useUiStore.getState().setHoveredId(hit?.id ?? null)
     setCursor(hit ? 'move' : 'default')
