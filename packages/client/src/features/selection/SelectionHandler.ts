@@ -52,6 +52,15 @@ interface ResizeState {
   throttledYjs: ThrottledFn<[string, Partial<Shape>]>
 }
 
+interface ResizeGroupState {
+  handle: ResizeHandle
+  ax: number
+  ay: number
+  initialGroupBBox: { x: number; y: number; width: number; height: number }
+  initialShapes: Map<string, { x: number; y: number; width: number; height: number }>
+  throttledYjs: ThrottledFn<[[string, Partial<Shape>][]]>
+}
+
 interface MoveState {
   startSx: number
   startSy: number
@@ -68,6 +77,7 @@ type Interaction =
   | { type: 'idle' }
   | { type: 'move';         state: MoveState }
   | { type: 'resize';       state: ResizeState }
+  | { type: 'resize-group'; state: ResizeGroupState }
   | { type: 'rubber-band';  startWx: number; startWy: number }
 
 export function createSelectionHandlers(
@@ -96,7 +106,43 @@ export function createSelectionHandlers(
     const { shapes } = useShapeStore.getState()
     const { selectedIds } = useSelectionStore.getState()
 
-    // --- Priority 1: resize handles on selected resizable shapes ---
+    // --- Priority 1a: group resize handles (≥2 resizable shapes selected) ---
+    if (selectedIds.size >= 2) {
+      const groupBBox = computeGroupBBox(selectedIds, shapes)
+      if (groupBBox) {
+        const handle = hitTestGroupHandle(groupBBox, sx, sy, vp)
+        if (handle) {
+          canvas.setPointerCapture(e.pointerId)
+          const ax = handle === 'nw' || handle === 'sw' ? groupBBox.x + groupBBox.width : groupBBox.x
+          const ay = handle === 'nw' || handle === 'ne' ? groupBBox.y + groupBBox.height : groupBBox.y
+          const initialShapes = new Map<string, { x: number; y: number; width: number; height: number }>()
+          for (const id of selectedIds) {
+            const s = shapes[id]
+            if (!s || s.type === 'arrow' || s.type === 'text' || s.type === 'freehand') continue
+            initialShapes.set(id, { x: s.x, y: s.y, width: s.width, height: s.height })
+          }
+          interaction = {
+            type: 'resize-group',
+            state: {
+              handle, ax, ay,
+              initialGroupBBox: groupBBox,
+              initialShapes,
+              throttledYjs: throttle(
+                (patches: [string, Partial<Shape>][]) => {
+                  for (const [id, patch] of patches) updateShape(id, patch)
+                },
+                32,
+                { leading: true, trailing: true },
+              ),
+            },
+          }
+          setCursor(HANDLE_CURSORS[handle])
+          return
+        }
+      }
+    }
+
+    // --- Priority 1b: resize handles on selected resizable shapes ---
     for (const id of selectedIds) {
       const shape = shapes[id]
       if (!shape || shape.type === 'arrow' || shape.type === 'text' || shape.type === 'freehand') continue
@@ -191,6 +237,29 @@ export function createSelectionHandlers(
       return
     }
 
+    // Group resize drag
+    if (interaction.type === 'resize-group') {
+      const { handle, ax, ay, initialGroupBBox, initialShapes, throttledYjs } = interaction.state
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const groupPatch = applyResize(handle, ax, ay, initialGroupBBox.width, initialGroupBBox.height, wx, wy, e.shiftKey)
+      const patches: [string, Partial<Shape>][] = []
+      if (initialGroupBBox.width > 0 && initialGroupBBox.height > 0) {
+        for (const [id, orig] of initialShapes) {
+          const patch: Partial<Shape> = {
+            x:      groupPatch.x! + ((orig.x - initialGroupBBox.x) / initialGroupBBox.width)  * (groupPatch.width  as number),
+            y:      groupPatch.y! + ((orig.y - initialGroupBBox.y) / initialGroupBBox.height) * (groupPatch.height as number),
+            width:  Math.max(MIN_SIZE, (orig.width  / initialGroupBBox.width)  * (groupPatch.width  as number)),
+            height: Math.max(MIN_SIZE, (orig.height / initialGroupBBox.height) * (groupPatch.height as number)),
+          }
+          updateShapeLocal(id, patch)
+          patches.push([id, patch])
+        }
+      }
+      throttledYjs(patches)
+      requestRender()
+      return
+    }
+
     // Resize drag
     if (interaction.type === 'resize') {
       const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
@@ -262,6 +331,24 @@ export function createSelectionHandlers(
       }
     }
 
+    if (interaction.type === 'resize-group') {
+      const { handle, ax, ay, initialGroupBBox, initialShapes, throttledYjs } = interaction.state
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const groupPatch = applyResize(handle, ax, ay, initialGroupBBox.width, initialGroupBBox.height, wx, wy, e.shiftKey)
+      throttledYjs.flush()
+      throttledYjs.cancel()
+      if (initialGroupBBox.width > 0 && initialGroupBBox.height > 0) {
+        for (const [id, orig] of initialShapes) {
+          updateShape(id, {
+            x:      groupPatch.x! + ((orig.x - initialGroupBBox.x) / initialGroupBBox.width)  * (groupPatch.width  as number),
+            y:      groupPatch.y! + ((orig.y - initialGroupBBox.y) / initialGroupBBox.height) * (groupPatch.height as number),
+            width:  Math.max(MIN_SIZE, (orig.width  / initialGroupBBox.width)  * (groupPatch.width  as number)),
+            height: Math.max(MIN_SIZE, (orig.height / initialGroupBBox.height) * (groupPatch.height as number)),
+          })
+        }
+      }
+    }
+
     if (interaction.type === 'resize') {
       const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
       const { x: wx, y: wy } = screenToWorld(sx, sy)
@@ -291,6 +378,48 @@ export function createSelectionHandlers(
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerup', onPointerUp)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Group resize helpers
+// ---------------------------------------------------------------------------
+
+function computeGroupBBox(
+  ids: Set<string>,
+  shapes: Record<string, Shape>,
+): { x: number; y: number; width: number; height: number } | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  let count = 0
+  for (const id of ids) {
+    const s = shapes[id]
+    if (!s || s.type === 'arrow' || s.type === 'text' || s.type === 'freehand') continue
+    minX = Math.min(minX, s.x);       minY = Math.min(minY, s.y)
+    maxX = Math.max(maxX, s.x + s.width); maxY = Math.max(maxY, s.y + s.height)
+    count++
+  }
+  if (count < 2 || !isFinite(minX)) return null
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+function hitTestGroupHandle(
+  bbox: { x: number; y: number; width: number; height: number },
+  sx: number,
+  sy: number,
+  vp: { zoom: number; offsetX: number; offsetY: number },
+): ResizeHandle | null {
+  const { zoom, offsetX, offsetY } = vp
+  const corners: [ResizeHandle, number, number][] = [
+    ['nw', bbox.x,              bbox.y              ],
+    ['ne', bbox.x + bbox.width, bbox.y              ],
+    ['sw', bbox.x,              bbox.y + bbox.height ],
+    ['se', bbox.x + bbox.width, bbox.y + bbox.height ],
+  ]
+  for (const [handle, wx, wy] of corners) {
+    const hsx = wx * zoom + offsetX
+    const hsy = wy * zoom + offsetY
+    if (Math.abs(sx - hsx) <= 6 && Math.abs(sy - hsy) <= 6) return handle
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
