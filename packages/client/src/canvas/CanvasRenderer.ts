@@ -8,8 +8,10 @@
  */
 import { renderShape, invalidateFreehandPath } from '../features/shapes/ShapeRenderer.js'
 import { renderDraft } from '../features/drawing/DraftRenderer.js'
+import { renderSelectionOverlay } from '../features/selection/SelectionRenderer.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
+import { useSelectionStore } from '../features/selection/selectionStore.js'
 import { getBoundingBox } from '../lib/boundingBox.js'
 import type { DraftShape } from '../features/drawing/DrawingHandler.js'
 import type { Shape } from '@canvas-draw/shared'
@@ -76,6 +78,11 @@ export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | n
   }
 
   ctx.restore()
+
+  // Selection overlay + rubber-band (screen-space, after ctx.restore())
+  const { selectedIds, rubberBand } = useSelectionStore.getState()
+  const selectedShapes = [...selectedIds].map((id) => shapes[id]).filter(Boolean) as Shape[]
+  renderSelectionOverlay(ctx, selectedShapes, rubberBand, viewport)
 }
 
 function isShapeVisible(
