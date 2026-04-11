@@ -20,6 +20,7 @@ import type { Shape } from '@canvas-draw/shared'
 import {
   hitTestShapes,
   hitTestHandle,
+  shapesInRect,
   getResizeAnchor,
   type ResizeHandle,
 } from './hitTest.js'
@@ -65,8 +66,9 @@ interface MoveState {
 
 type Interaction =
   | { type: 'idle' }
-  | { type: 'move';   state: MoveState }
-  | { type: 'resize'; state: ResizeState }
+  | { type: 'move';         state: MoveState }
+  | { type: 'resize';       state: ResizeState }
+  | { type: 'rubber-band';  startWx: number; startWy: number }
 
 export function createSelectionHandlers(
   canvas: HTMLCanvasElement,
@@ -164,9 +166,12 @@ export function createSelectionHandlers(
       return
     }
 
-    // Canvas → deselect
+    // Canvas → rubber-band
     if (!e.shiftKey) useSelectionStore.getState().deselectAll()
+    const { x: startWx, y: startWy } = screenToWorld(sx, sy)
+    useSelectionStore.getState().setRubberBand({ startX: startWx, startY: startWy, endX: startWx, endY: startWy })
     canvas.setPointerCapture(e.pointerId)
+    interaction = { type: 'rubber-band', startWx, startWy }
     requestRender()
   }
 
@@ -174,6 +179,17 @@ export function createSelectionHandlers(
     if (useUiStore.getState().activeTool !== 'select') return
     const { sx, sy } = getScreenPos(e)
     const { screenToWorld } = useUiStore.getState()
+
+    // Rubber-band
+    if (interaction.type === 'rubber-band') {
+      const { rubberBand } = useSelectionStore.getState()
+      if (rubberBand) {
+        const { x: endX, y: endY } = screenToWorld(sx, sy)
+        useSelectionStore.getState().setRubberBand({ ...rubberBand, endX, endY })
+        requestRender()
+      }
+      return
+    }
 
     // Resize drag
     if (interaction.type === 'resize') {
@@ -232,6 +248,19 @@ export function createSelectionHandlers(
 
     const { sx, sy } = getScreenPos(e)
     const { screenToWorld } = useUiStore.getState()
+
+    if (interaction.type === 'rubber-band') {
+      const { rubberBand } = useSelectionStore.getState()
+      if (rubberBand) {
+        const { x: endX, y: endY } = screenToWorld(sx, sy)
+        const rw = endX - rubberBand.startX
+        const rh = endY - rubberBand.startY
+        const { shapes } = useShapeStore.getState()
+        const hits = shapesInRect(shapes, rubberBand.startX, rubberBand.startY, rw, rh)
+        useSelectionStore.getState().selectMany(hits.map((s) => s.id))
+        useSelectionStore.getState().setRubberBand(null)
+      }
+    }
 
     if (interaction.type === 'resize') {
       const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
