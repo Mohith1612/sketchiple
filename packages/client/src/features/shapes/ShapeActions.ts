@@ -31,8 +31,19 @@ export function updateShape(id: string, patch: Partial<Omit<Shape, 'id'>>): void
 }
 
 export function removeShape(id: string): void {
+  const { shapes } = useShapeStore.getState()
   ydoc.transact(() => {
-    getShapesMap().delete(id)
+    const map = getShapesMap()
+    map.delete(id)
+    // Unbind any arrows referencing this shape within the same transaction
+    for (const shape of Object.values(shapes)) {
+      if (shape.type !== 'arrow') continue
+      const patch: Partial<Shape> = {}
+      let changed = false
+      if (shape.fromShapeId === id) { Object.assign(patch, { fromShapeId: undefined, fromAnchor: undefined }); changed = true }
+      if (shape.toShapeId   === id) { Object.assign(patch, { toShapeId:   undefined, toAnchor:   undefined }); changed = true }
+      if (changed) map.set(shape.id, { ...shape, ...patch })
+    }
   })
   useShapeStore.getState()._deleteShape(id)
   invalidateFreehandPath(id)
