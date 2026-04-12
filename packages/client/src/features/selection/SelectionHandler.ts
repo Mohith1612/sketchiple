@@ -416,6 +416,17 @@ export function createSelectionHandlers(
       }
     }
 
+    // Check arrow endpoints
+    for (const id of selectedIds) {
+      const shape = shapes[id]
+      if (!shape || shape.type !== 'arrow') continue
+      if (hitTestArrowEndpoint(shape, sx, sy, vp)) {
+        setCursor('crosshair')
+        useUiStore.getState().setHoveredId(null)
+        return
+      }
+    }
+
     // Check shape body
     const hit = hitTestShapes(shapes, wx, wy)
     useUiStore.getState().setHoveredId(hit?.id ?? null)
