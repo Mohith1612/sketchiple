@@ -15,6 +15,8 @@ import { useSelectionStore } from '../features/selection/selectionStore.js'
 import { getBoundingBox } from '../lib/boundingBox.js'
 import type { DraftShape } from '../features/drawing/DrawingHandler.js'
 import type { Shape } from '@canvas-draw/shared'
+// snapIndicator is a mutable export updated by SelectionHandler during arrow endpoint drags
+import { snapIndicator } from '../features/selection/SelectionHandler.js'
 
 // ---------------------------------------------------------------------------
 // Remote lerp state — module-level, never goes in Zustand
@@ -79,10 +81,25 @@ export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | n
 
   ctx.restore()
 
-  // Selection overlay + rubber-band (screen-space, after ctx.restore())
+  // Selection overlay rendered in screen-space
   const { selectedIds, rubberBand } = useSelectionStore.getState()
-  const selectedShapes = [...selectedIds].map((id) => shapes[id]).filter(Boolean) as Shape[]
+  const selectedShapes = [...selectedIds]
+    .map((id) => shapes[id])
+    .filter(Boolean) as Shape[]
   renderSelectionOverlay(ctx, selectedShapes, rubberBand, viewport)
+
+  // Snap indicator — shown during arrow endpoint drag near a snap anchor
+  if (snapIndicator) {
+    const isx = snapIndicator.x * zoom + offsetX
+    const isy = snapIndicator.y * zoom + offsetY
+    ctx.beginPath()
+    ctx.arc(isx, isy, 8, 0, Math.PI * 2)
+    ctx.strokeStyle = '#6366f1'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(99,102,241,0.15)'
+    ctx.fill()
+  }
 }
 
 function isShapeVisible(
