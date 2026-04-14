@@ -6,7 +6,10 @@ import type { DraftShape } from './features/drawing/index.js'
 import { createSelectionHandlers } from './features/selection/SelectionHandler.js'
 import { useSelectionStore } from './features/selection/selectionStore.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
-import { groupSelected, ungroupSelected, alignSelected } from './features/shapes/index.js'
+import { removeShape, groupSelected, ungroupSelected, alignSelected } from './features/shapes/index.js'
+import { useShapeStore } from './store/shapeStore.js'
+import { ydoc, getShapesMap } from './crdt/doc.js'
+import type { Shape } from '@canvas-draw/shared'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
 import { undoManager } from './crdt/undoManager.js'
@@ -117,6 +120,45 @@ export function App() {
         return
       }
 
+      // Arrow key nudging — 1px normal, 10px with Shift
+      const NUDGE_DELTAS: Record<string, [number, number]> = {
+        ArrowLeft:  [-1, 0],
+        ArrowRight: [1,  0],
+        ArrowUp:    [0, -1],
+        ArrowDown:  [0,  1],
+      }
+      if (e.code in NUDGE_DELTAS && !meta) {
+        const { selectedIds } = useSelectionStore.getState()
+        if (selectedIds.size > 0) {
+          e.preventDefault()
+          const factor = e.shiftKey ? 10 : 1
+          const [baseDx, baseDy] = NUDGE_DELTAS[e.code]!
+          const dx = baseDx * factor
+          const dy = baseDy * factor
+          const { shapes } = useShapeStore.getState()
+          ydoc.transact(() => {
+            for (const id of selectedIds) {
+              const s = shapes[id]
+              if (!s) continue
+              const patch: Partial<Shape> = { x: s.x + dx, y: s.y + dy }
+              if (s.points) {
+                patch.points = [
+                  [s.points[0][0] + dx, s.points[0][1] + dy],
+                  [s.points[1][0] + dx, s.points[1][1] + dy],
+                ]
+              }
+              if (s.freehandPoints) {
+                patch.freehandPoints = s.freehandPoints.map(([px, py]) => [px + dx, py + dy])
+              }
+              const updated = { ...s, ...patch }
+              getShapesMap().set(id, updated)
+              useShapeStore.getState()._upsertShape(updated)
+            }
+          })
+          return
+        }
+      }
+
       if (meta && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
         undoManager.undo()
@@ -126,6 +168,15 @@ export function App() {
         e.preventDefault()
         undoManager.redo()
         return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+        const { selectedIds } = useSelectionStore.getState()
+        if (selectedIds.size === 0) return
+        if (e.key === 'Backspace' && (e.target as HTMLElement).tagName !== 'BODY') return
+        e.preventDefault()
+        selectedIds.forEach((id) => removeShape(id))
+        useSelectionStore.getState().deselectAll()
       }
     }
     window.addEventListener('keydown', onKeyDown)
