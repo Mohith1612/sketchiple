@@ -9,6 +9,7 @@ import type { Shape } from '@canvas-draw/shared'
 import { ydoc, getShapesMap } from '../../crdt/doc.js'
 import { useShapeStore } from '../../store/shapeStore.js'
 import { invalidateFreehandPath } from './ShapeRenderer.js'
+import { newId } from '../../lib/uuid.js'
 
 export type AlignMode = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom'
 
@@ -107,6 +108,50 @@ export function sendBackward(ids: string[]): void {
     }
     return next
   })
+}
+
+export function groupSelected(ids: string[]): string | null {
+  const { shapes } = useShapeStore.getState()
+  const selected = ids
+    .map((id) => shapes[id])
+    .filter((shape): shape is Shape => Boolean(shape))
+  if (selected.length < 2) return null
+
+  const groupId = newId()
+  ydoc.transact(() => {
+    const map = getShapesMap()
+    for (const shape of selected) {
+      map.set(shape.id, { ...shape, groupId })
+    }
+  })
+
+  for (const shape of selected) {
+    useShapeStore.getState()._upsertShape({ ...shape, groupId })
+  }
+  return groupId
+}
+
+export function ungroupSelected(ids: string[]): void {
+  const { shapes } = useShapeStore.getState()
+  const selected = ids
+    .map((id) => shapes[id])
+    .filter((shape): shape is Shape => Boolean(shape))
+  if (selected.length === 0) return
+
+  ydoc.transact(() => {
+    const map = getShapesMap()
+    for (const shape of selected) {
+      const updated = { ...shape }
+      delete updated.groupId
+      map.set(shape.id, updated)
+    }
+  })
+
+  for (const shape of selected) {
+    const updated = { ...shape }
+    delete updated.groupId
+    useShapeStore.getState()._upsertShape(updated)
+  }
 }
 
 function reorderSelected(
