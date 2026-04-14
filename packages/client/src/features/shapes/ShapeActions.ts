@@ -110,6 +110,64 @@ export function sendBackward(ids: string[]): void {
   })
 }
 
+export function alignSelected(ids: string[], mode: AlignMode): void {
+  const { shapes } = useShapeStore.getState()
+  const selected = ids
+    .map((id) => shapes[id])
+    .filter((shape): shape is Shape => Boolean(shape))
+  if (selected.length < 2) return
+
+  const minX = Math.min(...selected.map((s) => s.x))
+  const maxX = Math.max(...selected.map((s) => s.x + s.width))
+  const minY = Math.min(...selected.map((s) => s.y))
+  const maxY = Math.max(...selected.map((s) => s.y + s.height))
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+
+  const updates: Shape[] = selected.map((shape) => {
+    let targetX = shape.x
+    let targetY = shape.y
+
+    if (mode === 'left') targetX = minX
+    if (mode === 'hcenter') targetX = centerX - shape.width / 2
+    if (mode === 'right') targetX = maxX - shape.width
+    if (mode === 'top') targetY = minY
+    if (mode === 'vcenter') targetY = centerY - shape.height / 2
+    if (mode === 'bottom') targetY = maxY - shape.height
+
+    const dx = targetX - shape.x
+    const dy = targetY - shape.y
+    if (dx === 0 && dy === 0) return shape
+
+    const updated: Shape = {
+      ...shape,
+      x: targetX,
+      y: targetY,
+    }
+    if (shape.points) {
+      updated.points = [
+        [shape.points[0][0] + dx, shape.points[0][1] + dy],
+        [shape.points[1][0] + dx, shape.points[1][1] + dy],
+      ]
+    }
+    if (shape.freehandPoints) {
+      updated.freehandPoints = shape.freehandPoints.map(([x, y]) => [x + dx, y + dy])
+    }
+    return updated
+  })
+
+  ydoc.transact(() => {
+    const map = getShapesMap()
+    for (const shape of updates) {
+      map.set(shape.id, shape)
+    }
+  })
+
+  for (const shape of updates) {
+    useShapeStore.getState()._upsertShape(shape)
+  }
+}
+
 export function groupSelected(ids: string[]): string | null {
   const { shapes } = useShapeStore.getState()
   const selected = ids
