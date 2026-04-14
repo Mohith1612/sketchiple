@@ -225,7 +225,18 @@ export function createSelectionHandlers(
       if (e.shiftKey) {
         useSelectionStore.getState().toggleSelection(hit.id)
       } else if (!selectedIds.has(hit.id)) {
-        useSelectionStore.getState().selectOne(hit.id)
+        if (hit.groupId) {
+          const groupIds = Object.values(shapes)
+            .filter((s) => s.groupId === hit.groupId)
+            .map((s) => s.id)
+          if (groupIds.length > 0) {
+            useSelectionStore.getState().selectMany(groupIds)
+          } else {
+            useSelectionStore.getState().selectOne(hit.id)
+          }
+        } else {
+          useSelectionStore.getState().selectOne(hit.id)
+        }
       }
 
       canvas.setPointerCapture(e.pointerId)
