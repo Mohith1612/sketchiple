@@ -4,7 +4,9 @@ import { renderScene } from './canvas/CanvasRenderer.js'
 import { createDrawingHandlers } from './features/drawing/index.js'
 import type { DraftShape } from './features/drawing/index.js'
 import { createSelectionHandlers } from './features/selection/SelectionHandler.js'
+import { useSelectionStore } from './features/selection/selectionStore.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
+import { groupSelected, ungroupSelected, alignSelected } from './features/shapes/index.js'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
 import { undoManager } from './crdt/undoManager.js'
@@ -85,11 +87,36 @@ export function App() {
     engineRef.current?.requestRender()
   })
 
-  // Undo / Redo keyboard shortcuts
+  // Undo / Redo / Group / Alignment keyboard shortcuts
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const meta = e.ctrlKey || e.metaKey
       if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+
+      if (meta && e.key.toLowerCase() === 'g' && !e.shiftKey) {
+        e.preventDefault()
+        groupSelected([...useSelectionStore.getState().selectedIds])
+        return
+      }
+      if (meta && e.key.toLowerCase() === 'g' && e.shiftKey) {
+        e.preventDefault()
+        ungroupSelected([...useSelectionStore.getState().selectedIds])
+        return
+      }
+
+      if (meta && e.shiftKey && ['l', 'e', 'r', 't', 'm', 'b'].includes(e.key.toLowerCase())) {
+        e.preventDefault()
+        const ids = [...useSelectionStore.getState().selectedIds]
+        const key = e.key.toLowerCase()
+        if (key === 'l') alignSelected(ids, 'left')
+        if (key === 'e') alignSelected(ids, 'hcenter')
+        if (key === 'r') alignSelected(ids, 'right')
+        if (key === 't') alignSelected(ids, 'top')
+        if (key === 'm') alignSelected(ids, 'vcenter')
+        if (key === 'b') alignSelected(ids, 'bottom')
+        return
+      }
+
       if (meta && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
         undoManager.undo()
