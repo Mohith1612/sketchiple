@@ -67,8 +67,29 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     awareness.setLocalStateField('cursor', null)
   }
 
+  // Inbound: awareness change → presenceStore
+  function onAwarenessChange({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) {
+    const store = usePresenceStore.getState()
+
+    for (const clientId of [...added, ...updated]) {
+      const state = awareness.getStates().get(clientId) as UserPresence | undefined
+      if (!state?.userId || state.userId === localUserId) continue
+      store._upsertRemoteUser({ ...state, userId: state.userId })
+    }
+
+    for (const clientId of removed) {
+      const state = awareness.getStates().get(clientId) as UserPresence | undefined
+      if (state?.userId) {
+        store._removeRemoteUser(state.userId)
+      }
+    }
+
+    engine.requestRender()
+  }
+
   canvas.addEventListener('pointermove', onPointerMove)
   canvas.addEventListener('pointerleave', onPointerLeave)
+  awareness.on('change', onAwarenessChange)
 
   return () => {
     sendCursor.flush()
@@ -78,5 +99,6 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     unsubViewport()
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerleave', onPointerLeave)
+    awareness.off('change', onAwarenessChange)
   }
 }
