@@ -91,6 +91,14 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
   canvas.addEventListener('pointerleave', onPointerLeave)
   awareness.on('change', onAwarenessChange)
 
+  // Hide cursor when tab is hidden
+  function onVisibilityChange() {
+    if (document.hidden) {
+      awareness.setLocalStateField('cursor', null)
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange)
+
   return () => {
     sendCursor.flush()
     sendCursor.cancel()
@@ -100,5 +108,6 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerleave', onPointerLeave)
     awareness.off('change', onAwarenessChange)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   }
 }
