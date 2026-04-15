@@ -11,6 +11,7 @@ import { renderDraft } from '../features/drawing/DraftRenderer.js'
 import { renderSelectionOverlay } from '../features/selection/SelectionRenderer.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
+import { usePresenceStore } from '../store/presenceStore.js'
 import { useSelectionStore } from '../features/selection/selectionStore.js'
 import { getBoundingBox } from '../lib/boundingBox.js'
 import type { DraftShape } from '../features/drawing/DrawingHandler.js'
@@ -24,6 +25,37 @@ import { snapIndicator } from '../features/selection/SelectionHandler.js'
 
 const _remotePos = new Map<string, { x: number; y: number }>()
 const LERP = 0.25
+
+// ---------------------------------------------------------------------------
+// Remote cursor lerp state
+// ---------------------------------------------------------------------------
+
+const _cursorPos    = new Map<string, { x: number; y: number }>()
+const _cursorTarget = new Map<string, { x: number; y: number }>()
+const CURSOR_LERP = 0.3
+
+/**
+ * Called by awarenessHandler when a remote cursor position arrives.
+ * First call snaps to position; subsequent calls lerp smoothly.
+ */
+export function markCursorUpdate(userId: string, wx: number, wy: number): void {
+  _cursorTarget.set(userId, { x: wx, y: wy })
+  if (!_cursorPos.has(userId)) {
+    _cursorPos.set(userId, { x: wx, y: wy }) // snap on first appearance
+  }
+}
+
+/** Called when a remote user disconnects. */
+export function clearCursorPos(userId: string): void {
+  _cursorPos.delete(userId)
+  _cursorTarget.delete(userId)
+}
+
+/** Clear all cursor lerp state (called on reconnect). */
+export function clearAllCursorPos(): void {
+  _cursorPos.clear()
+  _cursorTarget.clear()
+}
 
 /** Called by shapeStore observer when a remote delete happens. */
 export function clearRemoteLerpPos(id: string): void {
@@ -100,6 +132,61 @@ export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | n
     ctx.fillStyle = 'rgba(99,102,241,0.15)'
     ctx.fill()
   }
+
+  // Remote cursors rendered in screen-space
+  renderRemoteCursors(ctx, zoom, offsetX, offsetY)
+}
+
+function renderRemoteCursors(
+  ctx: CanvasRenderingContext2D,
+  zoom: number,
+  offsetX: number,
+  offsetY: number,
+): void {
+  const { remoteUsers } = usePresenceStore.getState()
+
+  ctx.save()
+  ctx.font = '11px system-ui, sans-serif'
+
+  for (const user of Object.values(remoteUsers)) {
+    if (!user.cursor) continue
+
+    // Seed lerp target from latest awareness position
+    markCursorUpdate(user.userId, user.cursor.x, user.cursor.y)
+
+    const target = _cursorTarget.get(user.userId)
+    const pos = _cursorPos.get(user.userId)
+    if (!target || !pos) continue
+
+    // Advance lerp one step
+    pos.x += (target.x - pos.x) * CURSOR_LERP
+    pos.y += (target.y - pos.y) * CURSOR_LERP
+    _cursorPos.set(user.userId, pos)
+
+    const sx = pos.x * zoom + offsetX
+    const sy = pos.y * zoom + offsetY
+
+    // Cursor dot
+    ctx.beginPath()
+    ctx.arc(sx, sy, 5, 0, Math.PI * 2)
+    ctx.fillStyle = user.color
+    ctx.fill()
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+
+    // Colored name badge
+    const label = user.name ?? user.userId.slice(0, 6)
+    const labelW = ctx.measureText(label).width + 8
+    ctx.fillStyle = user.color
+    ctx.beginPath()
+    ctx.roundRect(sx + 6, sy - 18, labelW, 16, 4)
+    ctx.fill()
+    ctx.fillStyle = '#fff'
+    ctx.fillText(label, sx + 10, sy - 6)
+  }
+
+  ctx.restore()
 }
 
 function isShapeVisible(
