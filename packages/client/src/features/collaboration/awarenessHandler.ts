@@ -9,6 +9,7 @@ import type { CanvasEngine } from '../../canvas/CanvasEngine.js'
 import { wsProvider } from '../../crdt/sync.js'
 import { usePresenceStore } from '../../store/presenceStore.js'
 import { useUiStore } from '../../store/uiStore.js'
+import { clearCursorPos } from '../../canvas/CanvasRenderer.js'
 import type { UserPresence } from '@canvas-draw/shared'
 import { throttle } from '../../lib/throttle.js'
 
@@ -67,20 +68,34 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     awareness.setLocalStateField('cursor', null)
   }
 
-  // Inbound: awareness change → presenceStore
+  // Inbound: awareness change → presenceStore + follow mode
   function onAwarenessChange({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) {
     const store = usePresenceStore.getState()
+    const uiStore = useUiStore.getState()
 
     for (const clientId of [...added, ...updated]) {
       const state = awareness.getStates().get(clientId) as UserPresence | undefined
       if (!state?.userId || state.userId === localUserId) continue
       store._upsertRemoteUser({ ...state, userId: state.userId })
+
+      // Apply remote viewport when following this user.
+      // Use world-center projection so different canvas sizes work correctly.
+      if (state.userId === uiStore.followingUserId && state.viewport) {
+        const { zoom, centerX, centerY } = state.viewport
+        uiStore._setViewportFromFollow({
+          zoom,
+          offsetX: engine.logicalWidth / 2 - centerX * zoom,
+          offsetY: engine.logicalHeight / 2 - centerY * zoom,
+        })
+        engine.requestRender()
+      }
     }
 
     for (const clientId of removed) {
       const state = awareness.getStates().get(clientId) as UserPresence | undefined
       if (state?.userId) {
         store._removeRemoteUser(state.userId)
+        clearCursorPos(state.userId)
       }
     }
 
