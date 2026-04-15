@@ -26,12 +26,31 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     name: localName,
   } satisfies UserPresence)
 
-  // Throttle cursor updates to ~30fps so we don't flood the WebSocket channel.
+  // Throttle cursor + viewport updates to ~30fps so we don't flood the
+  // WebSocket channel. Without throttling, pointermove fires at 60+ fps and
+  // awareness updates consume the entire rate-limit budget.
   const sendCursor = throttle(
     (x: number, y: number) => { awareness.setLocalStateField('cursor', { x, y }) },
     33,
     { leading: true, trailing: true },
   )
+
+  const sendViewport = throttle(
+    (zoom: number, centerX: number, centerY: number) => {
+      awareness.setLocalStateField('viewport', { zoom, centerX, centerY })
+    },
+    33,
+    { leading: true, trailing: true },
+  )
+
+  // Outbound: viewport change → awareness viewport (throttled)
+  // Subscribe to uiStore viewport so any navigation (pan, zoom, follow) is broadcast.
+  const unsubViewport = useUiStore.subscribe((state) => {
+    const { zoom, offsetX, offsetY } = state.viewport
+    const centerX = (engine.logicalWidth / 2 - offsetX) / zoom
+    const centerY = (engine.logicalHeight / 2 - offsetY) / zoom
+    sendViewport(zoom, centerX, centerY)
+  })
 
   // Outbound: pointer move → awareness cursor (throttled)
   function onPointerMove(e: PointerEvent) {
@@ -54,6 +73,9 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
   return () => {
     sendCursor.flush()
     sendCursor.cancel()
+    sendViewport.flush()
+    sendViewport.cancel()
+    unsubViewport()
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerleave', onPointerLeave)
   }
