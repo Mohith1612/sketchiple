@@ -57,6 +57,38 @@ export function clearAllCursorPos(): void {
   _cursorTarget.clear()
 }
 
+// ---------------------------------------------------------------------------
+// Dedicated cursor RAF loop
+// Runs independently of shape-change redraws so remote cursors animate
+// smoothly even when the canvas is otherwise idle.
+// ---------------------------------------------------------------------------
+
+let _cursorRafId: number | null = null
+
+/**
+ * Start a continuous RAF loop that calls requestRender() whenever at least
+ * one remote user is present. Returns a cleanup function.
+ *
+ * Call once from App.tsx after the canvas engine is ready.
+ */
+export function startCursorLoop(requestRender: () => void): () => void {
+  function tick() {
+    if (Object.keys(usePresenceStore.getState().remoteUsers).length > 0) {
+      requestRender()
+    }
+    _cursorRafId = requestAnimationFrame(tick)
+  }
+  if (_cursorRafId === null) {
+    _cursorRafId = requestAnimationFrame(tick)
+  }
+  return () => {
+    if (_cursorRafId !== null) {
+      cancelAnimationFrame(_cursorRafId)
+      _cursorRafId = null
+    }
+  }
+}
+
 /** Called by shapeStore observer when a remote delete happens. */
 export function clearRemoteLerpPos(id: string): void {
   _remotePos.delete(id)
