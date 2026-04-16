@@ -193,6 +193,7 @@ export function App() {
     function onWheel(e: WheelEvent) {
       e.preventDefault()
       const store = useUiStore.getState()
+      // Local navigation breaks follow mode
       store.setFollowing(null)
       if (e.ctrlKey || e.metaKey) {
         const rect = canvas!.getBoundingClientRect()
