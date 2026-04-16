@@ -141,6 +141,10 @@ class YjsWebSocketProvider {
       this.setState('DISCONNECTED')
       awarenessProtocol.removeAwarenessStates(this.awareness, [ydoc.clientID], 'disconnect')
       usePresenceStore.getState().clearAll()
+      // Clear cursor lerp state — stale positions must not bleed into next session
+      void import('../canvas/CanvasRenderer.js').then(({ clearAllCursorPos }) => {
+        clearAllCursorPos()
+      })
       this.scheduleReconnect()
     }
 
