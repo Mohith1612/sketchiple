@@ -96,6 +96,10 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
       if (state?.userId) {
         store._removeRemoteUser(state.userId)
         clearCursorPos(state.userId)
+        // Cancel follow if the user we were following disconnected
+        if (state.userId === useUiStore.getState().followingUserId) {
+          useUiStore.getState().setFollowing(null)
+        }
       }
     }
 
