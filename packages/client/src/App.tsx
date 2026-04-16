@@ -6,6 +6,7 @@ import type { DraftShape } from './features/drawing/index.js'
 import { createSelectionHandlers } from './features/selection/SelectionHandler.js'
 import { useSelectionStore } from './features/selection/selectionStore.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
+import { FollowPanel } from './features/collaboration/FollowPanel.js'
 import { removeShape, groupSelected, ungroupSelected, alignSelected } from './features/shapes/index.js'
 import { useShapeStore } from './store/shapeStore.js'
 import { ydoc, getShapesMap } from './crdt/doc.js'
@@ -52,6 +53,7 @@ export function App() {
   const draftRef = useRef<DraftShape | null>(null)
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
+  const isFollowing = useUiStore((s) => s.followingUserId !== null)
 
   draftRef.current = draft
 
@@ -222,7 +224,7 @@ export function App() {
       <div
         style={{
           position: 'absolute',
-          top: 12,
+          top: isFollowing ? 44 : 12,
           left: '50%',
           transform: 'translateX(-50%)',
           display: 'flex',
@@ -249,6 +251,8 @@ export function App() {
           </button>
         ))}
       </div>
+
+      <FollowPanel />
 
       <canvas
         ref={canvasRef}
