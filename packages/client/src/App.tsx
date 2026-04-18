@@ -11,6 +11,8 @@ import { removeShape, groupSelected, ungroupSelected, alignSelected } from './fe
 import { useShapeStore } from './store/shapeStore.js'
 import { ydoc, getShapesMap } from './crdt/doc.js'
 import type { Shape } from '@canvas-draw/shared'
+import { createTextHandlers, TextOverlay } from './features/text/index.js'
+import type { TextEditingState } from './features/text/index.js'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
 import { undoManager } from './crdt/undoManager.js'
@@ -51,6 +53,7 @@ export function App() {
   const engineRef = useRef<CanvasEngine | null>(null)
   const [draft, setDraft] = useState<DraftShape | null>(null)
   const draftRef = useRef<DraftShape | null>(null)
+  const [textEditing, setTextEditing] = useState<TextEditingState | null>(null)
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
   const isFollowing = useUiStore((s) => s.followingUserId !== null)
@@ -75,6 +78,10 @@ export function App() {
 
     const cleanupSelection = createSelectionHandlers(canvas, () => engine.requestRender())
 
+    const cleanupText = createTextHandlers(canvas, (state) => {
+      setTextEditing(state)
+    })
+
     const roomId = getRoomId()
     wsProvider.connect(roomId)
 
@@ -83,6 +90,7 @@ export function App() {
     return () => {
       cleanupDrawing()
       cleanupSelection()
+      cleanupText()
       engine.destroy()
     }
   }, [])
@@ -254,6 +262,13 @@ export function App() {
       </div>
 
       <FollowPanel />
+
+      {textEditing && (
+        <TextOverlay
+          editing={textEditing}
+          onDone={() => setTextEditing(null)}
+        />
+      )}
 
       <canvas
         ref={canvasRef}
