@@ -1,9 +1,10 @@
 import type { Shape } from '@canvas-draw/shared'
-import { addShape } from '../shapes/index.js'
+import { addShape, updateShape, removeShape } from '../shapes/index.js'
 import { hitTestShapes } from '../selection/hitTest.js'
 import { useShapeStore } from '../../store/shapeStore.js'
 import { useUiStore } from '../../store/uiStore.js'
 import { newId } from '../../lib/uuid.js'
+import { measureTextShape, invalidateTextMeasure } from '../../lib/textMeasure.js'
 
 export interface TextEditingState {
   shapeId: string
@@ -57,4 +58,18 @@ export function createTextHandlers(
 
   canvas.addEventListener('pointerdown', onPointerDown)
   return () => canvas.removeEventListener('pointerdown', onPointerDown)
+}
+
+/** Commit text content to Yjs. Called by TextOverlay on blur/Enter. */
+export function commitText(shapeId: string, content: string): void {
+  const shape = useShapeStore.getState().shapes[shapeId]
+  if (!shape) return
+  invalidateTextMeasure(shape)
+  const measured = measureTextShape({ ...shape, content })
+  updateShape(shapeId, { content, width: measured.width, height: measured.height })
+}
+
+/** Cancel a new text shape. Called by TextOverlay on Escape when isNew. */
+export function cancelText(shapeId: string): void {
+  removeShape(shapeId)
 }
