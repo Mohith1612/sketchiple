@@ -7,7 +7,16 @@ import { createSelectionHandlers } from './features/selection/SelectionHandler.j
 import { useSelectionStore } from './features/selection/selectionStore.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
 import { FollowPanel } from './features/collaboration/FollowPanel.js'
-import { removeShape, groupSelected, ungroupSelected, alignSelected } from './features/shapes/index.js'
+import {
+  removeShape,
+  bringToFront,
+  sendToBack,
+  bringForward,
+  sendBackward,
+  groupSelected,
+  ungroupSelected,
+  alignSelected,
+} from './features/shapes/index.js'
 import { useShapeStore } from './store/shapeStore.js'
 import { ydoc, getShapesMap } from './crdt/doc.js'
 import type { Shape } from '@canvas-draw/shared'
@@ -16,6 +25,7 @@ import type { TextEditingState } from './features/text/index.js'
 import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
 import { undoManager } from './crdt/undoManager.js'
+import { exportToJSON, exportToPNG, exportToSVG } from './features/export/index.js'
 
 function getRoomId(): string {
   const hash = window.location.hash.slice(1)
@@ -24,8 +34,6 @@ function getRoomId(): string {
   window.location.hash = id
   return id
 }
-
-// Attach wheel handler to canvas for zoom and pan
 
 const TOOLS: { id: Tool; label: string }[] = [
   { id: 'select', label: '↖ Select' },
@@ -37,17 +45,6 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'pan', label: '✋ Pan' },
 ]
 
-const btnBase: React.CSSProperties = {
-  padding: '6px 12px',
-  borderRadius: 6,
-  border: 'none',
-  cursor: 'pointer',
-  fontFamily: 'system-ui, sans-serif',
-  fontSize: 13,
-  background: '#f1f5f9',
-  color: '#334155',
-}
-
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<CanvasEngine | null>(null)
@@ -57,6 +54,11 @@ export function App() {
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
   const isFollowing = useUiStore((s) => s.followingUserId !== null)
+  const selectedCount = useSelectionStore((s) => s.selectedIds.size)
+
+  const [undoLen, setUndoLen] = useState(undoManager.undoStack.length)
+  const [redoLen, setRedoLen] = useState(undoManager.redoStack.length)
+  const [copied, setCopied] = useState(false)
 
   draftRef.current = draft
 
@@ -100,7 +102,78 @@ export function App() {
     engineRef.current?.requestRender()
   })
 
-  // Undo / Redo / Group / Alignment keyboard shortcuts
+  // Wheel zoom / pan
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    function onWheel(e: WheelEvent) {
+      e.preventDefault()
+      const store = useUiStore.getState()
+      // Local navigation breaks follow mode
+      store.setFollowing(null)
+      if (e.ctrlKey || e.metaKey) {
+        const rect = canvas!.getBoundingClientRect()
+        const mx = e.clientX - rect.left
+        const my = e.clientY - rect.top
+        const factor = e.deltaY < 0 ? 1.1 : 0.9
+        const newZoom = Math.max(0.1, Math.min(10, store.viewport.zoom * factor))
+        const scale = newZoom / store.viewport.zoom
+        store.setViewport({
+          zoom: newZoom,
+          offsetX: mx - scale * (mx - store.viewport.offsetX),
+          offsetY: my - scale * (my - store.viewport.offsetY),
+        })
+      } else {
+        store.setViewport({
+          offsetX: store.viewport.offsetX - e.deltaX,
+          offsetY: store.viewport.offsetY - e.deltaY,
+        })
+      }
+      engineRef.current?.requestRender()
+    }
+
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // Cursor style based on active tool
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    if (activeTool === 'pan') {
+      canvas.style.cursor = 'grab'
+    } else if (activeTool === 'select') {
+      canvas.style.cursor = 'default'
+    } else {
+      canvas.style.cursor = 'crosshair'
+    }
+  }, [activeTool])
+
+  // Space-key temporary pan
+  const prevToolRef = useRef<Tool | null>(null)
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code === 'Space' && !e.repeat && useUiStore.getState().activeTool !== 'pan') {
+        prevToolRef.current = useUiStore.getState().activeTool
+        setTool('pan')
+      }
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code === 'Space' && prevToolRef.current) {
+        setTool(prevToolRef.current)
+        prevToolRef.current = null
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [setTool])
+
+  // Undo / Redo / Group / Alignment / Delete / Nudge keyboard shortcuts
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const meta = e.ctrlKey || e.metaKey
@@ -193,43 +266,48 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Wheel zoom / pan
+  // Sync undo/redo stack lengths for button disabled state
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    function onWheel(e: WheelEvent) {
-      e.preventDefault()
-      const store = useUiStore.getState()
-      // Local navigation breaks follow mode
-      store.setFollowing(null)
-      if (e.ctrlKey || e.metaKey) {
-        const rect = canvas!.getBoundingClientRect()
-        const mx = e.clientX - rect.left
-        const my = e.clientY - rect.top
-        const factor = e.deltaY < 0 ? 1.1 : 0.9
-        const newZoom = Math.max(0.1, Math.min(10, store.viewport.zoom * factor))
-        const scale = newZoom / store.viewport.zoom
-        store.setViewport({
-          zoom: newZoom,
-          offsetX: mx - scale * (mx - store.viewport.offsetX),
-          offsetY: my - scale * (my - store.viewport.offsetY),
-        })
-      } else {
-        store.setViewport({
-          offsetX: store.viewport.offsetX - e.deltaX,
-          offsetY: store.viewport.offsetY - e.deltaY,
-        })
-      }
-      engineRef.current?.requestRender()
+    const update = () => {
+      setUndoLen(undoManager.undoStack.length)
+      setRedoLen(undoManager.redoStack.length)
     }
-
-    canvas.addEventListener('wheel', onWheel, { passive: false })
-    return () => canvas.removeEventListener('wheel', onWheel)
+    undoManager.on('stack-item-added', update)
+    undoManager.on('stack-item-popped', update)
+    undoManager.on('stack-item-updated', update)
+    return () => {
+      undoManager.off('stack-item-added', update)
+      undoManager.off('stack-item-popped', update)
+      undoManager.off('stack-item-updated', update)
+    }
   }, [])
+
+  function copyRoomLink() {
+    navigator.clipboard.writeText(window.location.href).catch(console.error)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const btnBase: React.CSSProperties = {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: 'none',
+    cursor: 'pointer',
+    fontFamily: 'system-ui, sans-serif',
+    fontSize: 13,
+    background: '#f1f5f9',
+    color: '#334155',
+  }
+  const btnDisabled: React.CSSProperties = {
+    ...btnBase,
+    opacity: 0.4,
+    cursor: 'default',
+  }
+  const divider = <div style={{ width: 1, background: '#e2e8f0', margin: '0 4px' }} />
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Toolbar — shifts down when follow banner is visible */}
       <div
         style={{
           position: 'absolute',
@@ -237,10 +315,13 @@ export function App() {
           left: '50%',
           transform: 'translateX(-50%)',
           display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
           gap: 4,
           background: '#ffffff',
           borderRadius: 8,
           padding: '6px 10px',
+          maxWidth: 'calc(100vw - 24px)',
           boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
           zIndex: 10,
         }}
@@ -254,11 +335,172 @@ export function App() {
               fontWeight: activeTool === t.id ? 700 : 400,
               background: activeTool === t.id ? '#6366f1' : '#f1f5f9',
               color: activeTool === t.id ? '#fff' : '#334155',
+              transition: 'all 0.1s',
             }}
           >
             {t.label}
           </button>
         ))}
+
+        {divider}
+
+        <button
+          onClick={() => undoManager.undo()}
+          disabled={undoLen === 0}
+          style={undoLen === 0 ? btnDisabled : btnBase}
+          title="Undo (Ctrl+Z)"
+        >
+          ⟲ Undo
+        </button>
+        <button
+          onClick={() => undoManager.redo()}
+          disabled={redoLen === 0}
+          style={redoLen === 0 ? btnDisabled : btnBase}
+          title="Redo (Ctrl+Shift+Z)"
+        >
+          ⟳ Redo
+        </button>
+
+        {divider}
+
+        <button
+          onClick={() => sendToBack([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Send to back"
+        >
+          ⇤ Back
+        </button>
+        <button
+          onClick={() => sendBackward([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Send backward"
+        >
+          ↙ Backward
+        </button>
+        <button
+          onClick={() => bringForward([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Bring forward"
+        >
+          ↗ Forward
+        </button>
+        <button
+          onClick={() => bringToFront([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Bring to front"
+        >
+          ⇥ Front
+        </button>
+
+        {divider}
+
+        <button
+          onClick={() => groupSelected([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Group"
+        >
+          ⊞ Group
+        </button>
+        <button
+          onClick={() => ungroupSelected([...useSelectionStore.getState().selectedIds])}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Ungroup"
+        >
+          ⊟ Ungroup
+        </button>
+
+        {divider}
+
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'left')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align left"
+        >
+          ⇤ Align L
+        </button>
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'hcenter')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align horizontal center"
+        >
+          ↔ Align C
+        </button>
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'right')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align right"
+        >
+          ⇥ Align R
+        </button>
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'top')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align top"
+        >
+          ⇡ Align T
+        </button>
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'vcenter')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align vertical center"
+        >
+          ↕ Align M
+        </button>
+        <button
+          onClick={() => alignSelected([...useSelectionStore.getState().selectedIds], 'bottom')}
+          disabled={selectedCount < 2}
+          style={selectedCount < 2 ? btnDisabled : btnBase}
+          title="Align bottom"
+        >
+          ⇣ Align B
+        </button>
+
+        {divider}
+
+        <button onClick={() => exportToJSON()} style={btnBase}>↓ JSON</button>
+        <button
+          onClick={() => exportToJSON({ selectedOnly: true })}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Export selected to JSON"
+        >
+          ↓ JSON Sel
+        </button>
+        <button onClick={() => { exportToPNG().catch(console.error) }} style={btnBase}>↓ PNG</button>
+        <button
+          onClick={() => { exportToPNG({ selectedOnly: true }).catch(console.error) }}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Export selected to PNG"
+        >
+          ↓ PNG Sel
+        </button>
+        <button onClick={() => exportToSVG()} style={btnBase}>↓ SVG</button>
+        <button
+          onClick={() => exportToSVG({ selectedOnly: true })}
+          disabled={selectedCount === 0}
+          style={selectedCount === 0 ? btnDisabled : btnBase}
+          title="Export selected to SVG"
+        >
+          ↓ SVG Sel
+        </button>
+
+        {divider}
+
+        <button onClick={copyRoomLink} style={copied ? { ...btnBase, color: '#16a34a' } : btnBase}>
+          {copied ? '✓ Copied!' : '⎘ Share'}
+        </button>
       </div>
 
       <FollowPanel />
