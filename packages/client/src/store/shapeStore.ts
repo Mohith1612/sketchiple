@@ -57,6 +57,10 @@ export function initShapeStoreSync(): void {
           void import('../canvas/CanvasRenderer.js').then(({ clearRemoteLerpPos }) => {
             clearRemoteLerpPos(key)
           })
+          // Cancel in-flight draft if remote peer deleted the shape we're drawing
+          void import('../features/drawing/DrawingHandler.js').then(({ currentDraftId, cancelCurrentDraft }) => {
+            if (currentDraftId === key) cancelCurrentDraft()
+          })
         }
       })
     })
