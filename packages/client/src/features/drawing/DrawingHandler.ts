@@ -13,6 +13,20 @@ import { rdp } from '../../lib/rdp.js'
 import { getBoundingBox } from '../../lib/boundingBox.js'
 import { throttle, type ThrottledFn } from '../../lib/throttle.js'
 
+/**
+ * Module-level draft tracking for remote-delete conflict handling.
+ * When a remote peer deletes a shape that the local user is currently drawing,
+ * the shapeStore observer calls cancelCurrentDraft() to cleanly close the draft.
+ */
+export let currentDraftId: string | null = null
+
+let _cancelDraftFn: (() => void) | null = null
+
+/** Called by shapeStore observer when the active draft shape is deleted remotely. */
+export function cancelCurrentDraft(): void {
+  _cancelDraftFn?.()
+}
+
 export interface DraftShape {
   type: Shape['type']
   startX: number
@@ -91,6 +105,16 @@ export function createDrawingHandlers(
       ...(tool === 'arrow' ? { points: [[x, y], [x, y]] as [[number, number], [number, number]] } : {}),
     })
     activeDraftId = initialShape.id
+    currentDraftId = initialShape.id
+    _cancelDraftFn = () => {
+      draft = null
+      activeDraftId = null
+      currentDraftId = null
+      _cancelDraftFn = null
+      throttledDrawSync?.cancel()
+      throttledDrawSync = null
+      setDraft(null)
+    }
     throttledDrawSync = throttle(
       (id: string, patch: Parameters<typeof updateShape>[1]) => updateShape(id, patch),
       32,
@@ -180,6 +204,8 @@ export function createDrawingHandlers(
     const { startX, startY, currentX, currentY, type } = draft
     const id = activeDraftId!
     activeDraftId = null
+    currentDraftId = null
+    _cancelDraftFn = null
     throttledDrawSync?.flush()
     throttledDrawSync?.cancel()
     throttledDrawSync = null
