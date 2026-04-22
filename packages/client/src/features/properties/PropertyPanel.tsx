@@ -35,13 +35,14 @@ export function PropertyPanel() {
   const opacityValue = opacity === 'mixed' ? 1 : opacity
   const opacityLabel = opacity === 'mixed' ? '–' : `${Math.round(opacity * 100)}%`
 
-  function commitPatch(patch: Partial<Shape>): void {
+  function batchCommit(patch: Partial<Shape>): void {
     ydoc.transact(() => {
       selectedIds.forEach((id) => {
         const s = shapes[id]
         if (s) getShapesMap().set(id, { ...s, ...patch })
       })
     })
+    // Zustand preview already applied by previewAll — no second upsert needed
   }
 
   const label: React.CSSProperties = {
@@ -83,7 +84,8 @@ export function PropertyPanel() {
           type="color"
           style={inp}
           value={strokeValue}
-          onChange={(e) => commitPatch({ stroke: e.target.value })}
+          onChange={(e) => batchCommit({ stroke: e.target.value })}
+          onBlur={(e) => batchCommit({ stroke: e.target.value })}
         />
       </div>
 
@@ -94,7 +96,8 @@ export function PropertyPanel() {
           type="color"
           style={inp}
           value={fillValue}
-          onChange={(e) => commitPatch({ fill: e.target.value })}
+          onChange={(e) => batchCommit({ fill: e.target.value })}
+          onBlur={(e) => batchCommit({ fill: e.target.value })}
         />
       </div>
 
@@ -110,7 +113,12 @@ export function PropertyPanel() {
           max={20}
           style={inp}
           value={strokeWidthValue}
-          onChange={(e) => commitPatch({ strokeWidth: Number(e.target.value) })}
+          onChange={(e) => batchCommit({ strokeWidth: Number(e.target.value) })}
+          onPointerUp={(e) =>
+            batchCommit({
+              strokeWidth: Number((e.target as HTMLInputElement).value),
+            })
+          }
         />
       </div>
 
@@ -127,7 +135,12 @@ export function PropertyPanel() {
           step={0.01}
           style={inp}
           value={opacityValue}
-          onChange={(e) => commitPatch({ opacity: Number(e.target.value) })}
+          onChange={(e) => batchCommit({ opacity: Number(e.target.value) })}
+          onPointerUp={(e) =>
+            batchCommit({
+              opacity: Number((e.target as HTMLInputElement).value),
+            })
+          }
         />
       </div>
     </div>
