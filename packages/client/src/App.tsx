@@ -26,6 +26,7 @@ import { wsProvider } from './crdt/sync.js'
 import { newId } from './lib/uuid.js'
 import { undoManager } from './crdt/undoManager.js'
 import { exportToJSON, exportToPNG, exportToSVG } from './features/export/index.js'
+import { copySelected, pasteClipboard, duplicate } from './features/clipboard/index.js'
 
 function getRoomId(): string {
   const hash = window.location.hash.slice(1)
@@ -178,6 +179,10 @@ export function App() {
     function onKeyDown(e: KeyboardEvent) {
       const meta = e.ctrlKey || e.metaKey
       if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+
+      if (meta && e.key === 'c') { e.preventDefault(); copySelected(); return }
+      if (meta && e.key === 'v') { e.preventDefault(); pasteClipboard(); return }
+      if (meta && e.key === 'd') { e.preventDefault(); duplicate(); return }
 
       if (meta && e.key.toLowerCase() === 'g' && !e.shiftKey) {
         e.preventDefault()
