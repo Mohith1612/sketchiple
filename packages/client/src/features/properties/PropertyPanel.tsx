@@ -35,6 +35,10 @@ export function PropertyPanel() {
   const opacityValue = opacity === 'mixed' ? 1 : opacity
   const opacityLabel = opacity === 'mixed' ? '–' : `${Math.round(opacity * 100)}%`
 
+  function previewAll(patch: Partial<Shape>): void {
+    selected.forEach((s) => useShapeStore.getState()._upsertShape({ ...s, ...patch }))
+  }
+
   function batchCommit(patch: Partial<Shape>): void {
     ydoc.transact(() => {
       selectedIds.forEach((id) => {
@@ -84,7 +88,7 @@ export function PropertyPanel() {
           type="color"
           style={inp}
           value={strokeValue}
-          onChange={(e) => batchCommit({ stroke: e.target.value })}
+          onChange={(e) => previewAll({ stroke: e.target.value })}
           onBlur={(e) => batchCommit({ stroke: e.target.value })}
         />
       </div>
@@ -96,7 +100,7 @@ export function PropertyPanel() {
           type="color"
           style={inp}
           value={fillValue}
-          onChange={(e) => batchCommit({ fill: e.target.value })}
+          onChange={(e) => previewAll({ fill: e.target.value })}
           onBlur={(e) => batchCommit({ fill: e.target.value })}
         />
       </div>
@@ -113,7 +117,7 @@ export function PropertyPanel() {
           max={20}
           style={inp}
           value={strokeWidthValue}
-          onChange={(e) => batchCommit({ strokeWidth: Number(e.target.value) })}
+          onChange={(e) => previewAll({ strokeWidth: Number(e.target.value) })}
           onPointerUp={(e) =>
             batchCommit({
               strokeWidth: Number((e.target as HTMLInputElement).value),
@@ -135,7 +139,7 @@ export function PropertyPanel() {
           step={0.01}
           style={inp}
           value={opacityValue}
-          onChange={(e) => batchCommit({ opacity: Number(e.target.value) })}
+          onChange={(e) => previewAll({ opacity: Number(e.target.value) })}
           onPointerUp={(e) =>
             batchCommit({
               opacity: Number((e.target as HTMLInputElement).value),
