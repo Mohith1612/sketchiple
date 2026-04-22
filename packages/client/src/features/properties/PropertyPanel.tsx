@@ -28,12 +28,25 @@ export function PropertyPanel() {
   const strokeWidth = getSharedValue(selected, 'strokeWidth')
   const opacity = getSharedValue(selected, 'opacity')
 
+  const allText = selected.every((s) => s.type === 'text')
+  const fontSize = allText ? getSharedValue(selected, 'fontSize') : null
+  const fontFamily = allText ? getSharedValue(selected, 'fontFamily') : null
+  const fontWeight = allText ? getSharedValue(selected, 'fontWeight') : null
+  const textAlign = allText ? getSharedValue(selected, 'textAlign') : null
+
   const strokeValue = stroke === 'mixed' ? '#000000' : stroke
   const fillValue = fill === 'mixed' || !fill || fill === 'transparent' ? '#ffffff' : fill
   const strokeWidthValue = strokeWidth === 'mixed' ? 2 : strokeWidth
   const strokeWidthLabel = strokeWidth === 'mixed' ? '–' : strokeWidth
   const opacityValue = opacity === 'mixed' ? 1 : opacity
   const opacityLabel = opacity === 'mixed' ? '–' : `${Math.round(opacity * 100)}%`
+  const fontSizeValue = fontSize === 'mixed' || fontSize == null ? 16 : fontSize
+  const fontSizeLabel = fontSize === 'mixed' ? '–' : fontSizeValue
+  const fontFamilyValue =
+    fontFamily === 'mixed' || !fontFamily ? 'system-ui, sans-serif' : fontFamily
+  const fontWeightValue =
+    fontWeight === 'mixed' || !fontWeight ? 'normal' : fontWeight
+  const textAlignValue = textAlign === 'mixed' || !textAlign ? 'left' : textAlign
 
   function previewAll(patch: Partial<Shape>): void {
     selected.forEach((s) => useShapeStore.getState()._upsertShape({ ...s, ...patch }))
@@ -147,6 +160,94 @@ export function PropertyPanel() {
           }
         />
       </div>
+      {/* Font size — text shapes only */}
+      {allText && (
+        <>
+          <div>
+            <label style={label}>
+              Font size:{' '}
+              {fontSizeLabel}
+            </label>
+            <input
+              type="number"
+              min={8}
+              max={200}
+              style={{ ...inp, padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: 4 }}
+              value={fontSizeValue}
+              onChange={(e) => previewAll({ fontSize: Number(e.target.value) })}
+              onBlur={(e) =>
+                batchCommit({ fontSize: Number(e.target.value) })
+              }
+            />
+          </div>
+
+          <div>
+            <label style={label}>Font family</label>
+            <select
+              style={{ ...inp, padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: 4 }}
+              value={fontFamilyValue}
+              onChange={(e) => {
+                previewAll({ fontFamily: e.target.value })
+                batchCommit({ fontFamily: e.target.value })
+              }}
+            >
+              <option value="system-ui, sans-serif">System</option>
+              <option value="Inter, system-ui, sans-serif">Inter</option>
+              <option value="Arial, Helvetica, sans-serif">Arial</option>
+              <option value="Georgia, serif">Georgia</option>
+              <option value="ui-monospace, SFMono-Regular, Menlo, monospace">Monospace</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={label}>Font weight</label>
+            <select
+              style={{ ...inp, padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: 4 }}
+              value={fontWeightValue}
+              onChange={(e) => {
+                const value: 'normal' | 'bold' = e.target.value === 'bold' ? 'bold' : 'normal'
+                previewAll({ fontWeight: value })
+                batchCommit({ fontWeight: value })
+              }}
+            >
+              <option value="normal">Normal</option>
+              <option value="bold">Bold</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={label}>Text align</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {([
+                ['left', 'Left'],
+                ['center', 'Center'],
+                ['right', 'Right'],
+              ] as const).map(([value, title]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    previewAll({ textAlign: value })
+                    batchCommit({ textAlign: value })
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    borderRadius: 4,
+                    border: '1px solid #cbd5e1',
+                    background: textAlignValue === value ? '#6366f1' : '#f8fafc',
+                    color: textAlignValue === value ? '#fff' : '#334155',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {title}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
