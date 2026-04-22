@@ -53,5 +53,10 @@ function cloneWithOffset(shape: Shape, dx: number, dy: number): Shape {
   if (c.freehandPoints) {
     c.freehandPoints = c.freehandPoints.map(([x, y]) => [x + dx, y + dy])
   }
+  // Cloned arrows are always unbound
+  delete c.fromShapeId
+  delete c.toShapeId
+  delete c.fromAnchor
+  delete c.toAnchor
   return c
 }
