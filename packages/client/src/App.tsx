@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { CanvasEngine } from './canvas/CanvasEngine.js'
-import { renderScene } from './canvas/CanvasRenderer.js'
+import { renderScene, startCursorLoop } from './canvas/CanvasRenderer.js'
 import { createDrawingHandlers } from './features/drawing/index.js'
 import type { DraftShape } from './features/drawing/index.js'
-import { createSelectionHandlers } from './features/selection/SelectionHandler.js'
+import { createSelectionHandlers } from './features/selection/index.js'
 import { useSelectionStore } from './features/selection/selectionStore.js'
 import { useUiStore, type Tool } from './store/uiStore.js'
-import { FollowPanel } from './features/collaboration/FollowPanel.js'
+import { initAwareness, ConnectionStatus, FollowPanel } from './features/collaboration/index.js'
+import { wsProvider } from './crdt/sync.js'
+import { newId } from './lib/uuid.js'
+import { exportToJSON, exportToPNG, exportToSVG } from './features/export/index.js'
+import { DebugPanel } from './features/debug/index.js'
 import {
   removeShape,
   bringToFront,
@@ -17,16 +21,15 @@ import {
   ungroupSelected,
   alignSelected,
 } from './features/shapes/index.js'
+import { undoManager } from './crdt/undoManager.js'
+import { createTextHandlers, TextOverlay } from './features/text/index.js'
+import type { TextEditingState } from './features/text/index.js'
+import { PropertyPanel } from './features/properties/index.js'
+import { copySelected, pasteClipboard, duplicate } from './features/clipboard/index.js'
+import { Minimap } from './features/minimap/index.js'
 import { useShapeStore } from './store/shapeStore.js'
 import { ydoc, getShapesMap } from './crdt/doc.js'
 import type { Shape } from '@canvas-draw/shared'
-import { createTextHandlers, TextOverlay } from './features/text/index.js'
-import type { TextEditingState } from './features/text/index.js'
-import { wsProvider } from './crdt/sync.js'
-import { newId } from './lib/uuid.js'
-import { undoManager } from './crdt/undoManager.js'
-import { exportToJSON, exportToPNG, exportToSVG } from './features/export/index.js'
-import { copySelected, pasteClipboard, duplicate } from './features/clipboard/index.js'
 
 function getRoomId(): string {
   const hash = window.location.hash.slice(1)
@@ -51,18 +54,24 @@ export function App() {
   const engineRef = useRef<CanvasEngine | null>(null)
   const [draft, setDraft] = useState<DraftShape | null>(null)
   const draftRef = useRef<DraftShape | null>(null)
+  const prevToolRef = useRef<Tool | null>(null)
   const [textEditing, setTextEditing] = useState<TextEditingState | null>(null)
+
   const activeTool = useUiStore((s) => s.activeTool)
   const setTool = useUiStore((s) => s.setTool)
-  const isFollowing = useUiStore((s) => s.followingUserId !== null)
   const selectedCount = useSelectionStore((s) => s.selectedIds.size)
+  const isFollowing = useUiStore((s) => s.followingUserId !== null)
 
+  // Undo/redo stack lengths for button disabled state
   const [undoLen, setUndoLen] = useState(undoManager.undoStack.length)
   const [redoLen, setRedoLen] = useState(undoManager.redoStack.length)
+
+  // Copy-link feedback
   const [copied, setCopied] = useState(false)
 
   draftRef.current = draft
 
+  // Bootstrap canvas engine
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -79,26 +88,31 @@ export function App() {
       () => engine.requestRender(),
     )
 
-    const cleanupSelection = createSelectionHandlers(canvas, () => engine.requestRender())
+    const cleanupSelection = createSelectionHandlers(canvas, () => {
+      engine.requestRender()
+    })
 
     const cleanupText = createTextHandlers(canvas, (state) => {
       setTextEditing(state)
     })
 
+    const cleanupAwareness = initAwareness(canvas, engine)
+    const stopCursorLoop = startCursorLoop(() => engine.requestRender())
+
     const roomId = getRoomId()
     wsProvider.connect(roomId)
 
-    engine.requestRender()
-
     return () => {
+      stopCursorLoop()
       cleanupDrawing()
       cleanupSelection()
       cleanupText()
+      cleanupAwareness()
       engine.destroy()
     }
   }, [])
 
-  // Re-render whenever store state changes
+  // Re-render whenever anything in stores changes
   useEffect(() => {
     engineRef.current?.requestRender()
   })
@@ -152,7 +166,6 @@ export function App() {
   }, [activeTool])
 
   // Space-key temporary pan
-  const prevToolRef = useRef<Tool | null>(null)
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.code === 'Space' && !e.repeat && useUiStore.getState().activeTool !== 'pan') {
@@ -174,10 +187,12 @@ export function App() {
     }
   }, [setTool])
 
-  // Undo / Redo / Group / Alignment / Delete / Nudge keyboard shortcuts
+  // Undo / Redo / Delete / Nudge keyboard shortcuts
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const meta = e.ctrlKey || e.metaKey
+
+      // Don't fire shortcuts when a textarea is focused
       if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
 
       if (meta && e.key === 'c') { e.preventDefault(); copySelected(); return }
@@ -258,9 +273,11 @@ export function App() {
         return
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Don't fire while a text textarea is active
         if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
         const { selectedIds } = useSelectionStore.getState()
         if (selectedIds.size === 0) return
+        // Don't intercept Backspace when typing in any input
         if (e.key === 'Backspace' && (e.target as HTMLElement).tagName !== 'BODY') return
         e.preventDefault()
         selectedIds.forEach((id) => removeShape(id))
@@ -508,19 +525,31 @@ export function App() {
         </button>
       </div>
 
-      <FollowPanel />
-
-      {textEditing && (
-        <TextOverlay
-          editing={textEditing}
-          onDone={() => setTextEditing(null)}
-        />
-      )}
-
+      {/* Canvas */}
       <canvas
         ref={canvasRef}
         style={{ display: 'block', width: '100%', height: '100%' }}
       />
+
+      {/* Shape property panel */}
+      <PropertyPanel />
+
+      {/* Text editing overlay */}
+      {textEditing && (
+        <TextOverlay editing={textEditing} onDone={() => setTextEditing(null)} />
+      )}
+
+      {/* Minimap */}
+      <Minimap />
+
+      {/* Connection status indicator */}
+      <ConnectionStatus />
+
+      {/* Follow panel + banner */}
+      <FollowPanel />
+
+      {/* Dev debug panel */}
+      {import.meta.env.DEV && <DebugPanel />}
     </div>
   )
 }
