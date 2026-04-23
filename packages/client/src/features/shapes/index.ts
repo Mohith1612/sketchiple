@@ -1,3 +1,5 @@
 export * from './ShapeModel.js'
 export * from './ShapeActions.js'
 export * from './ShapeRenderer.js'
+export * from './useShapes.js'
+export { resolveArrowEndpoints, snapToShape } from './arrowBinding.js'
