@@ -33,7 +33,7 @@ function computeTransform(shapes: Shape[]): MinimapTransform {
 function renderMinimap(
   ctx: CanvasRenderingContext2D,
   shapes: Shape[],
-  _viewport: Viewport,
+  viewport: Viewport,
 ): void {
   ctx.clearRect(0, 0, W, H)
   ctx.fillStyle = '#f8f9fa'
@@ -53,7 +53,18 @@ function renderMinimap(
     ctx.strokeRect(bb.x * scale + ox, bb.y * scale + oy, bb.width * scale, bb.height * scale)
   }
 
+  // Draw viewport rectangle
+  const vpLeft = -viewport.offsetX / viewport.zoom
+  const vpTop = -viewport.offsetY / viewport.zoom
+  const vpW = window.innerWidth / viewport.zoom
+  const vpH = window.innerHeight / viewport.zoom
+
   ctx.globalAlpha = 1
+  ctx.strokeStyle = '#6366f1'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([4, 3])
+  ctx.strokeRect(vpLeft * scale + ox, vpTop * scale + oy, vpW * scale, vpH * scale)
+  ctx.setLineDash([])
 
   // Outer border
   ctx.strokeStyle = '#cbd5e1'
