@@ -1,5 +1,29 @@
 {
   "name": "canvas-draw",
   "private": true,
-  "version": "0.0.1"
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "pnpm --filter @canvas-draw/server dev & pnpm --filter @canvas-draw/client dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r --if-present test",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "coverage": "pnpm -r --if-present coverage",
+    "security:deps": "pnpm audit -P --audit-level high --ignore-registry-errors",
+    "security:deps:all": "pnpm audit --audit-level high --ignore-registry-errors",
+    "lint": "eslint 'packages/*/src/**/*.{ts,tsx}'",
+    "format": "prettier --write 'packages/*/src/**/*.{ts,tsx}'",
+    "perf:shapes": "pnpm --filter @canvas-draw/server exec tsx ../../tests/perf/stressShapes.ts",
+    "perf:ws": "pnpm --filter @canvas-draw/server exec tsx ../../tests/perf/stressWs.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.0",
+    "typescript": "5.5.4"
+  }
 }
