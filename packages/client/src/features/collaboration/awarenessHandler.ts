@@ -44,15 +44,6 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     { leading: true, trailing: true },
   )
 
-  // Outbound: viewport change → awareness viewport (throttled)
-  // Subscribe to uiStore viewport so any navigation (pan, zoom, follow) is broadcast.
-  const unsubViewport = useUiStore.subscribe((state) => {
-    const { zoom, offsetX, offsetY } = state.viewport
-    const centerX = (engine.logicalWidth / 2 - offsetX) / zoom
-    const centerY = (engine.logicalHeight / 2 - offsetY) / zoom
-    sendViewport(zoom, centerX, centerY)
-  })
-
   // Outbound: pointer move → awareness cursor (throttled)
   function onPointerMove(e: PointerEvent) {
     const rect = canvas.getBoundingClientRect()
@@ -67,6 +58,15 @@ export function initAwareness(canvas: HTMLCanvasElement, engine: CanvasEngine): 
     sendCursor.cancel()
     awareness.setLocalStateField('cursor', null)
   }
+
+  // Outbound: viewport change → awareness viewport (throttled)
+  // Subscribe to uiStore viewport so any navigation (pan, zoom, follow) is broadcast.
+  const unsubViewport = useUiStore.subscribe((state) => {
+    const { zoom, offsetX, offsetY } = state.viewport
+    const centerX = (engine.logicalWidth / 2 - offsetX) / zoom
+    const centerY = (engine.logicalHeight / 2 - offsetY) / zoom
+    sendViewport(zoom, centerX, centerY)
+  })
 
   // Inbound: awareness change → presenceStore + follow mode
   function onAwarenessChange({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) {

@@ -48,6 +48,7 @@ export class CanvasEngine {
     this.requestRender()
   }
 
+  /** Returns logical (CSS pixel) dimensions. */
   get logicalWidth(): number {
     return this.canvas.clientWidth
   }
@@ -64,6 +65,7 @@ export class CanvasEngine {
     this.renderCallback = fn
   }
 
+  /** Mark content as changed without scheduling a render immediately. */
   markDirty(): void {
     this._dirty = true
   }

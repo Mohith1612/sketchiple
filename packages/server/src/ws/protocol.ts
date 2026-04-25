@@ -31,6 +31,10 @@ class ProtocolValidationError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Outbound encoders
+// ---------------------------------------------------------------------------
+
 export function encodeSyncStep1(doc: Y.Doc): Uint8Array {
   const enc = encoding.createEncoder()
   encoding.writeVarUint(enc, MSG_SYNC)
@@ -52,8 +56,12 @@ export function encodeAwareness(update: Uint8Array): Uint8Array {
   return toUint8ArraySafe(encoding.toUint8Array(enc))
 }
 
+// ---------------------------------------------------------------------------
+// Inbound handler
+// ---------------------------------------------------------------------------
+
 export function handleMessage(
-  data: Uint8Array,
+  data: Uint8Array, // MUST be a copy — not the raw uWS ArrayBuffer
   room: Room,
   ws: WebSocket<UserData>,
 ): void {
@@ -69,6 +77,9 @@ export function handleMessage(
     const replyEnc = encoding.createEncoder()
     encoding.writeVarUint(replyEnc, MSG_SYNC)
 
+    // syncProtocol.readSyncMessage reads the sync sub-type and handles it.
+    // If it produces a reply (e.g., syncStep2 in response to syncStep1),
+    // it writes into replyEnc and returns the sub-type.
     const syncMsgTypeRaw: unknown = safeReadSyncMessage(dec, replyEnc, room.doc, ws)
     const syncMsgType = typeof syncMsgTypeRaw === 'number' ? syncMsgTypeRaw : -1
 
@@ -80,14 +91,17 @@ export function handleMessage(
       throw new ProtocolValidationError('Unexpected trailing bytes in SYNC payload')
     }
 
+    // Send reply if the encoder has content (> 1 byte: the MSG_SYNC prefix)
     if (encoding.length(replyEnc) > 1) {
       ws.send(toUint8ArraySafe(encoding.toUint8Array(replyEnc)), true)
     }
 
+    // If this was a doc update (type 2), broadcast to other clients
     if (syncMsgType === 2) {
+      // Re-encode the update for broadcast
       const dec2 = decoding.createDecoder(data)
-      safeReadVarUint(dec2, 'outer sync prefix')
-      safeReadVarUint(dec2, 'sync subtype')
+      safeReadVarUint(dec2, 'outer sync prefix') // skip outer MSG_SYNC
+      safeReadVarUint(dec2, 'sync subtype') // skip inner update type
       const update = safeReadVarUint8Array(dec2, 'sync update payload')
       if (update.byteLength === 0) {
         throw new ProtocolValidationError('SYNC update payload is empty')
@@ -111,6 +125,7 @@ export function handleMessage(
       throw new ProtocolValidationError('Unexpected trailing bytes in AWARENESS payload')
     }
     awarenessProtocol.applyAwarenessUpdate(room.awareness, update, ws)
+    // Broadcast to ALL clients including sender (awareness is reflected back)
     const msg = encodeAwareness(update)
     room.broadcast(msg)
   } else {
@@ -121,7 +136,7 @@ export function handleMessage(
 function encodeSyncUpdateBroadcast(update: Uint8Array): Uint8Array {
   const enc = encoding.createEncoder()
   encoding.writeVarUint(enc, MSG_SYNC)
-  encoding.writeVarUint(enc, 2)
+  encoding.writeVarUint(enc, 2) // messageYjsUpdate
   encoding.writeVarUint8Array(enc, update)
   return toUint8ArraySafe(encoding.toUint8Array(enc))
 }

@@ -50,6 +50,19 @@ export function createDrawingHandlers(
   let throttledDrawSync: ThrottledFn<[string, Parameters<typeof updateShape>[1]]> | null = null
   let panStart: { sx: number; sy: number; ox: number; oy: number } | null = null
 
+  function cancelDraft() {
+    if (!active) return
+    active = false
+    throttledDrawSync?.cancel()
+    throttledDrawSync = null
+    activeDraftId = null
+    currentDraftId = null
+    _cancelDraftFn = null
+    draft = null
+    setDraft(null)
+  }
+  _cancelDraftFn = cancelDraft
+
   function getWorldPos(e: PointerEvent) {
     const rect = canvas.getBoundingClientRect()
     const sx = e.clientX - rect.left
@@ -106,21 +119,14 @@ export function createDrawingHandlers(
     })
     activeDraftId = initialShape.id
     currentDraftId = initialShape.id
-    _cancelDraftFn = () => {
-      draft = null
-      activeDraftId = null
-      currentDraftId = null
-      _cancelDraftFn = null
-      throttledDrawSync?.cancel()
-      throttledDrawSync = null
-      setDraft(null)
-    }
+    _cancelDraftFn = cancelDraft
     throttledDrawSync = throttle(
       (id: string, patch: Parameters<typeof updateShape>[1]) => updateShape(id, patch),
       32,
       { leading: true, trailing: true },
     )
     addShape(initialShape)
+
     setDraft(draft)
   }
 
@@ -145,8 +151,9 @@ export function createDrawingHandlers(
     }
 
     draft = { ...draft, currentX: x, currentY: y }
-    setDraft(draft) // instant local render
+    setDraft(draft) // instant local render — doesn't wait for Yjs round-trip
 
+    // Throttled Yjs write: sync to peers at ~32ms to avoid flooding the network
     if (activeDraftId && throttledDrawSync) {
       const { startX, startY, currentX, currentY, type } = draft
       if (type === 'arrow') {
@@ -166,7 +173,6 @@ export function createDrawingHandlers(
         })
       }
     }
-    requestRender()
   }
 
   function onPointerUp() {
@@ -198,6 +204,8 @@ export function createDrawingHandlers(
       addShape(shape)
       setDraft(null)
       draft = null
+      currentDraftId = null
+      _cancelDraftFn = null
       return
     }
 
@@ -211,6 +219,7 @@ export function createDrawingHandlers(
     throttledDrawSync = null
 
     if (type === 'arrow') {
+      // Check if endpoints snap to nearby shapes
       const { viewport } = useUiStore.getState()
       const fromSnap = snapToShape(startX, startY, id, viewport.zoom, viewport.offsetX, viewport.offsetY)
       const toSnap = snapToShape(currentX, currentY, id, viewport.zoom, viewport.offsetX, viewport.offsetY)
@@ -224,29 +233,26 @@ export function createDrawingHandlers(
         ...(fromSnap ? { fromShapeId: fromSnap.shapeId, fromAnchor: fromSnap.anchor } : {}),
         ...(toSnap ? { toShapeId: toSnap.shapeId, toAnchor: toSnap.anchor } : {}),
       })
-      setDraft(null)
-      draft = null
-      return
+    } else {
+      const width = Math.abs(currentX - startX)
+      const height = Math.abs(currentY - startY)
+
+      if (width < 2 && height < 2) {
+        // Just a click — discard the placeholder shape that was added on pointerdown
+        removeShape(id)
+        setDraft(null)
+        draft = null
+        return
+      }
+
+      // Commit final dimensions
+      updateShape(id, {
+        x: Math.min(startX, currentX),
+        y: Math.min(startY, currentY),
+        width,
+        height,
+      })
     }
-
-    const width = Math.abs(currentX - startX)
-    const height = Math.abs(currentY - startY)
-
-    if (width < 2 && height < 2) {
-      // Just a click — discard the placeholder shape
-      removeShape(id)
-      setDraft(null)
-      draft = null
-      return
-    }
-
-    // Commit final dimensions
-    updateShape(id, {
-      x: Math.min(startX, currentX),
-      y: Math.min(startY, currentY),
-      width,
-      height,
-    })
 
     setDraft(null)
     draft = null

@@ -29,6 +29,9 @@ export const useShapeStore = create<ShapeStore>((set) => ({
 /**
  * Wire the Yjs observer → Zustand bridge.
  * Call once after ydoc is initialized (in main.tsx after persistence.whenSynced).
+ *
+ * Key invariant: if `transaction.local === true`, the change originated from
+ * ShapeActions which already updated Zustand directly — skip to avoid double-update.
  */
 export function initShapeStoreSync(): void {
   // Lazy import to avoid circular dependency at module load time
@@ -57,9 +60,9 @@ export function initShapeStoreSync(): void {
           void import('../canvas/CanvasRenderer.js').then(({ clearRemoteLerpPos }) => {
             clearRemoteLerpPos(key)
           })
-          // Cancel in-flight draft if remote peer deleted the shape we're drawing
+          // Cancel in-progress draft if the remote peer deleted the shape we're drawing
           void import('../features/drawing/DrawingHandler.js').then(({ currentDraftId, cancelCurrentDraft }) => {
-            if (currentDraftId === key) cancelCurrentDraft()
+            if (key === currentDraftId) cancelCurrentDraft()
           })
         }
       })

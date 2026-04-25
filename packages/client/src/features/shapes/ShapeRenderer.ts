@@ -3,6 +3,9 @@ import { resolveArrowEndpoints } from './arrowBinding.js'
 
 // ---------------------------------------------------------------------------
 // Path2D cache for committed freehand shapes
+// Cache is keyed by shape ID and validated by array reference equality.
+// A new freehandPoints array (created on any update/move) automatically
+// triggers a cache miss and path rebuild.
 // ---------------------------------------------------------------------------
 
 interface CachedPath {
@@ -12,6 +15,7 @@ interface CachedPath {
 
 const _freehandCache = new Map<string, CachedPath>()
 
+/** Evict a shape from the Path2D cache. Call on shape delete. */
 export function invalidateFreehandPath(id: string): void {
   _freehandCache.delete(id)
 }
@@ -71,11 +75,18 @@ export function renderShape(ctx: CanvasRenderingContext2D, shape: Shape): void {
       ctx.lineTo(x2, y2)
       ctx.stroke()
 
+      // Arrowhead
       ctx.beginPath()
       ctx.moveTo(x2, y2)
-      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6))
+      ctx.lineTo(
+        x2 - headLen * Math.cos(angle - Math.PI / 6),
+        y2 - headLen * Math.sin(angle - Math.PI / 6),
+      )
       ctx.moveTo(x2, y2)
-      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6))
+      ctx.lineTo(
+        x2 - headLen * Math.cos(angle + Math.PI / 6),
+        y2 - headLen * Math.sin(angle + Math.PI / 6),
+      )
       ctx.stroke()
       break
     }

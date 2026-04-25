@@ -17,6 +17,7 @@ import { ydoc, getShapesMap } from './doc.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
 import { usePresenceStore } from '../store/presenceStore.js'
+import { clearAllCursorPos } from '../canvas/CanvasRenderer.js'
 
 export type WsState = 'DISCONNECTED' | 'CONNECTING' | 'HANDSHAKING' | 'SYNCED'
 
@@ -56,7 +57,7 @@ class YjsWebSocketProvider {
 
     // When doc gets a local update, send to server
     ydoc.on('update', (update: Uint8Array, origin: unknown) => {
-      if (origin === this) return
+      if (origin === this) return // came from server; do not echo back
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
       this.ws.send(encodeSyncUpdate(update))
     })
@@ -78,6 +79,7 @@ class YjsWebSocketProvider {
   }
 
   connect(roomId: string): void {
+    // Idempotency: already connected/connecting to the same room (handles React Strict Mode double-mount)
     if (
       this.roomId === roomId &&
       this.ws !== null &&
@@ -85,7 +87,7 @@ class YjsWebSocketProvider {
     ) {
       return
     }
-    this.destroyed = false
+    this.destroyed = false // Allow re-use after a previous disconnect/destroy
     this.roomId = roomId
     this.reconnectAttempt = 0
     useUiStore.getState().setWsReconnectMeta({
@@ -100,6 +102,9 @@ class YjsWebSocketProvider {
   private _connect(): void {
     if (this.destroyed) return
 
+    // Close any existing socket before opening a new one.
+    // Nullify callbacks first so the old onclose doesn't trigger a spurious
+    // reconnect or clobber the new this.ws assignment below.
     if (this.ws) {
       const old = this.ws
       this.ws = null
@@ -127,8 +132,6 @@ class YjsWebSocketProvider {
         exhausted: false,
       })
       console.debug('[ws] connected, awaiting syncStep1 from server', { roomId: this.roomId })
-      // Send our syncStep1 so the server knows what state vector we have
-      this.ws?.send(encodeSyncStep1())
     }
 
     ws.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -139,17 +142,60 @@ class YjsWebSocketProvider {
       this.ws = null
       if (this.destroyed) return
       this.setState('DISCONNECTED')
+      // Remove local awareness state so cursor disappears for others
       awarenessProtocol.removeAwarenessStates(this.awareness, [ydoc.clientID], 'disconnect')
+      // Clear all stale remote cursors — they'll re-appear on reconnect via awareness
       usePresenceStore.getState().clearAll()
-      // Clear cursor lerp state — stale positions must not bleed into next session
-      void import('../canvas/CanvasRenderer.js').then(({ clearAllCursorPos }) => {
-        clearAllCursorPos()
-      })
+      clearAllCursorPos()
       this.scheduleReconnect()
     }
 
     ws.onerror = (err) => {
       console.warn('[ws] error:', err)
+    }
+  }
+
+  private handleIncoming(data: Uint8Array): void {
+    const dec = decoding.createDecoder(data)
+    const msgType = decoding.readVarUint(dec)
+
+    if (msgType === MSG_SYNC) {
+      const replyEnc = encoding.createEncoder()
+      encoding.writeVarUint(replyEnc, MSG_SYNC)
+
+      // readSyncMessage handles step1, step2, and update sub-types.
+      // It applies updates to ydoc (origin = this provider) and writes
+      // any reply (e.g. syncStep2 in response to syncStep1) into replyEnc.
+      const syncMsgTypeRaw: unknown = syncProtocol.readSyncMessage(dec, replyEnc, ydoc, this)
+      const syncMsgType = typeof syncMsgTypeRaw === 'number' ? syncMsgTypeRaw : -1
+
+      if (encoding.length(replyEnc) > 1) {
+        this.ws?.send(toUint8ArraySafe(encoding.toUint8Array(replyEnc)))
+      }
+
+      // After receiving syncStep1 from server, also send our own syncStep1
+      // so the server can send us what we're missing.
+      if (syncMsgType === 0) {
+        // We sent syncStep2 (response to server's step1) above.
+        // Now send our own syncStep1 to get the server's state.
+        const ourStep1 = encodeSyncStep1()
+        this.ws?.send(ourStep1)
+      }
+
+      // After the initial handshake (we've received syncStep2 = type 1), mark SYNCED
+      if (syncMsgType === 1) {
+        this.setState('SYNCED')
+        console.debug('[ws] sync complete', { roomId: this.roomId, shapes: getShapesMap().size })
+        // Re-populate Zustand in case server had additional shapes
+        const shapes: Record<string, Shape> = {}
+        for (const [id, shape] of getShapesMap().entries()) {
+          shapes[id] = shape
+        }
+        useShapeStore.getState()._setShapes(shapes)
+      }
+    } else if (msgType === MSG_AWARENESS) {
+      const update = toUint8ArraySafe(decoding.readVarUint8Array(dec))
+      awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this)
     }
   }
 
@@ -202,41 +248,6 @@ class YjsWebSocketProvider {
     }, delay)
   }
 
-  private handleIncoming(data: Uint8Array): void {
-    const dec = decoding.createDecoder(data)
-    const msgType = decoding.readVarUint(dec)
-
-    if (msgType === MSG_SYNC) {
-      const replyEnc = encoding.createEncoder()
-      encoding.writeVarUint(replyEnc, MSG_SYNC)
-
-      const syncMsgTypeRaw: unknown = syncProtocol.readSyncMessage(dec, replyEnc, ydoc, this)
-      const syncMsgType = typeof syncMsgTypeRaw === 'number' ? syncMsgTypeRaw : -1
-
-      if (encoding.length(replyEnc) > 1) {
-        this.ws?.send(toUint8ArraySafe(encoding.toUint8Array(replyEnc)))
-      }
-
-      if (syncMsgType === 0) {
-        const ourStep1 = encodeSyncStep1()
-        this.ws?.send(ourStep1)
-      }
-
-      if (syncMsgType === 1) {
-        this.setState('SYNCED')
-        console.debug('[ws] sync complete', { roomId: this.roomId, shapes: getShapesMap().size })
-        const shapes: Record<string, Shape> = {}
-        for (const [id, shape] of getShapesMap().entries()) {
-          shapes[id] = shape
-        }
-        useShapeStore.getState()._setShapes(shapes)
-      }
-    } else if (msgType === MSG_AWARENESS) {
-      const update = toUint8ArraySafe(decoding.readVarUint8Array(dec))
-      awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this)
-    }
-  }
-
   disconnect(): void {
     this.destroyed = true
     if (this.reconnectTimer !== null) {
@@ -268,6 +279,10 @@ export function computeJitteredBackoffMs(
   return Math.max(0, Math.floor(base * jitterMultiplier))
 }
 
+// ---------------------------------------------------------------------------
+// Encoder helpers
+// ---------------------------------------------------------------------------
+
 function encodeSyncStep1(): Uint8Array {
   const enc = encoding.createEncoder()
   encoding.writeVarUint(enc, MSG_SYNC)
@@ -296,11 +311,17 @@ function toUint8ArraySafe(value: unknown): Uint8Array {
 }
 
 function buildWsUrl(roomId: string): string {
+  // VITE_WS_URL is set in production (e.g. "wss://api.example.com").
+  // In development it is intentionally unset; Vite proxy forwards /ws → localhost:3001.
   const rawBase: unknown = import.meta.env.VITE_WS_URL
   const base = typeof rawBase === 'string' ? rawBase : ''
   if (base) return `${base}/ws/${roomId}`
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}/ws/${roomId}`
 }
+
+// ---------------------------------------------------------------------------
+// Singleton provider
+// ---------------------------------------------------------------------------
 
 export const wsProvider = new YjsWebSocketProvider()

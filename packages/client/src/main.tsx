@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { persistence } from './crdt/indexeddb.js'
 import { getShapesMap } from './crdt/doc.js'
-import { useShapeStore } from './store/shapeStore.js'
+import { useShapeStore, initShapeStoreSync } from './store/shapeStore.js'
 import { App } from './App.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 
@@ -15,7 +15,10 @@ async function init() {
   const initialShapes = Object.fromEntries(shapesMap.entries())
   useShapeStore.getState()._setShapes(initialShapes)
 
-  // 3. Mount React — canvas renders immediately with restored local state
+  // 3. Wire the Yjs → Zustand observer bridge (remote updates)
+  initShapeStoreSync()
+
+  // 4. Mount React — canvas renders immediately with restored local state
   const rootEl = document.getElementById('root')
   if (!rootEl) throw new Error('Missing #root element')
 

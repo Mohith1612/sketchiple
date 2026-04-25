@@ -2,8 +2,6 @@ import * as Y from 'yjs'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import type { WebSocket } from 'uWebSockets.js'
 import type { UserData } from '../ws/handler.js'
-import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
-import * as encoding from 'lib0/encoding'
 import { incCounter } from '../metrics/metrics.js'
 import { logger } from '../utils/logger.js'
 
@@ -40,6 +38,7 @@ export class Room {
     this.backpressureByClient = new Map()
     this.backpressureOptions = { ...DEFAULT_BACKPRESSURE_OPTIONS, ...options }
 
+    // When awareness state changes locally (server-side), broadcast to all clients
     this.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
       const changedClients = [...added, ...updated, ...removed]
       const update = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
@@ -65,8 +64,16 @@ export class Room {
     return this.clients.size
   }
 
+  /**
+   * Apply a Yjs update to the document and broadcast to all other clients.
+   * @param update - Copied Uint8Array (never pass raw uWS buffer)
+   * @param origin - The sending WebSocket (excluded from broadcast)
+   */
   applyUpdate(update: Uint8Array, origin: WebSocket<UserData>): void {
     Y.applyUpdate(this.doc, update, origin)
+    // Broadcast the minimal diff rather than the raw received update,
+    // so clients that are behind get the full state.
+    // For V1 simplicity, re-broadcast the received update (already a valid diff).
     this.broadcast(encodeSyncUpdate(update), origin)
   }
 
@@ -98,6 +105,7 @@ export class Room {
         continue
       }
 
+      // 0 = accepted with growing backpressure, 2 = dropped by uWS backpressure limit
       if (sendStatus === 0 || sendStatus === 2) return
     }
   }
@@ -126,6 +134,8 @@ export class Room {
     const sendStatus = ws.send(message, true)
     if (sendStatus === 1) return
 
+    // 0 = accepted with backpressure, 2 = dropped by backpressure limit.
+    // In both cases, keep a bounded retry queue and let drain flush later.
     this.enqueueOrDrop(ws, state, message)
   }
 
@@ -153,10 +163,14 @@ export class Room {
   }
 }
 
+// Inline message encoders (avoid circular dependency with protocol.ts)
+import { MSG_SYNC, MSG_AWARENESS } from '@canvas-draw/shared'
+import * as encoding from 'lib0/encoding'
+
 function encodeSyncUpdate(update: Uint8Array): Uint8Array {
   const enc = encoding.createEncoder()
   encoding.writeVarUint(enc, MSG_SYNC)
-  encoding.writeVarUint(enc, 2)
+  encoding.writeVarUint(enc, 2) // messageYjsUpdate = 2
   encoding.writeVarUint8Array(enc, update)
   return toUint8ArraySafe(encoding.toUint8Array(enc))
 }

@@ -34,16 +34,21 @@ export function updateShape(id: string, patch: Partial<Omit<Shape, 'id'>>): void
 export function removeShape(id: string): void {
   const { shapes } = useShapeStore.getState()
   ydoc.transact(() => {
-    const map = getShapesMap()
-    map.delete(id)
-    // Unbind any arrows referencing this shape within the same transaction
+    getShapesMap().delete(id)
+    // Unbind any arrows whose endpoints were bound to this shape
     for (const shape of Object.values(shapes)) {
       if (shape.type !== 'arrow') continue
-      const patch: Partial<Shape> = {}
-      let changed = false
-      if (shape.fromShapeId === id) { Object.assign(patch, { fromShapeId: undefined, fromAnchor: undefined }); changed = true }
-      if (shape.toShapeId   === id) { Object.assign(patch, { toShapeId:   undefined, toAnchor:   undefined }); changed = true }
-      if (changed) map.set(shape.id, { ...shape, ...patch })
+      if (shape.fromShapeId !== id && shape.toShapeId !== id) continue
+      const patched = { ...shape }
+      if (patched.fromShapeId === id) {
+        delete patched.fromShapeId
+        delete patched.fromAnchor
+      }
+      if (patched.toShapeId === id) {
+        delete patched.toShapeId
+        delete patched.toAnchor
+      }
+      getShapesMap().set(shape.id, patched)
     }
   })
   useShapeStore.getState()._deleteShape(id)
@@ -110,6 +115,50 @@ export function sendBackward(ids: string[]): void {
   })
 }
 
+export function groupSelected(ids: string[]): string | null {
+  const { shapes } = useShapeStore.getState()
+  const selected = ids
+    .map((id) => shapes[id])
+    .filter((shape): shape is Shape => Boolean(shape))
+  if (selected.length < 2) return null
+
+  const groupId = newId()
+  ydoc.transact(() => {
+    const map = getShapesMap()
+    for (const shape of selected) {
+      map.set(shape.id, { ...shape, groupId })
+    }
+  })
+
+  for (const shape of selected) {
+    useShapeStore.getState()._upsertShape({ ...shape, groupId })
+  }
+  return groupId
+}
+
+export function ungroupSelected(ids: string[]): void {
+  const { shapes } = useShapeStore.getState()
+  const selected = ids
+    .map((id) => shapes[id])
+    .filter((shape): shape is Shape => Boolean(shape))
+  if (selected.length === 0) return
+
+  ydoc.transact(() => {
+    const map = getShapesMap()
+    for (const shape of selected) {
+      const updated = { ...shape }
+      delete updated.groupId
+      map.set(shape.id, updated)
+    }
+  })
+
+  for (const shape of selected) {
+    const updated = { ...shape }
+    delete updated.groupId
+    useShapeStore.getState()._upsertShape(updated)
+  }
+}
+
 export function alignSelected(ids: string[], mode: AlignMode): void {
   const { shapes } = useShapeStore.getState()
   const selected = ids
@@ -165,50 +214,6 @@ export function alignSelected(ids: string[], mode: AlignMode): void {
 
   for (const shape of updates) {
     useShapeStore.getState()._upsertShape(shape)
-  }
-}
-
-export function groupSelected(ids: string[]): string | null {
-  const { shapes } = useShapeStore.getState()
-  const selected = ids
-    .map((id) => shapes[id])
-    .filter((shape): shape is Shape => Boolean(shape))
-  if (selected.length < 2) return null
-
-  const groupId = newId()
-  ydoc.transact(() => {
-    const map = getShapesMap()
-    for (const shape of selected) {
-      map.set(shape.id, { ...shape, groupId })
-    }
-  })
-
-  for (const shape of selected) {
-    useShapeStore.getState()._upsertShape({ ...shape, groupId })
-  }
-  return groupId
-}
-
-export function ungroupSelected(ids: string[]): void {
-  const { shapes } = useShapeStore.getState()
-  const selected = ids
-    .map((id) => shapes[id])
-    .filter((shape): shape is Shape => Boolean(shape))
-  if (selected.length === 0) return
-
-  ydoc.transact(() => {
-    const map = getShapesMap()
-    for (const shape of selected) {
-      const updated = { ...shape }
-      delete updated.groupId
-      map.set(shape.id, updated)
-    }
-  })
-
-  for (const shape of selected) {
-    const updated = { ...shape }
-    delete updated.groupId
-    useShapeStore.getState()._upsertShape(updated)
   }
 }
 

@@ -12,6 +12,17 @@ function getSharedValue<K extends keyof Shape>(
   return vals.length === 1 ? (vals[0] as Shape[K]) : 'mixed'
 }
 
+function batchCommit(selectedIds: Set<string>, patch: Partial<Shape>): void {
+  const { shapes } = useShapeStore.getState()
+  ydoc.transact(() => {
+    selectedIds.forEach((id) => {
+      const s = shapes[id]
+      if (s) getShapesMap().set(id, { ...s, ...patch })
+    })
+  })
+  // Zustand preview already applied by previewAll — no second upsert needed
+}
+
 export function PropertyPanel() {
   const selectedIds = useSelectionStore((s) => s.selectedIds)
   const shapes = useShapeStore((s) => s.shapes)
@@ -27,7 +38,6 @@ export function PropertyPanel() {
   const fill = getSharedValue(selected, 'fill')
   const strokeWidth = getSharedValue(selected, 'strokeWidth')
   const opacity = getSharedValue(selected, 'opacity')
-
   const allText = selected.every((s) => s.type === 'text')
   const fontSize = allText ? getSharedValue(selected, 'fontSize') : null
   const fontFamily = allText ? getSharedValue(selected, 'fontFamily') : null
@@ -50,16 +60,6 @@ export function PropertyPanel() {
 
   function previewAll(patch: Partial<Shape>): void {
     selected.forEach((s) => useShapeStore.getState()._upsertShape({ ...s, ...patch }))
-  }
-
-  function batchCommit(patch: Partial<Shape>): void {
-    ydoc.transact(() => {
-      selectedIds.forEach((id) => {
-        const s = shapes[id]
-        if (s) getShapesMap().set(id, { ...s, ...patch })
-      })
-    })
-    // Zustand preview already applied by previewAll — no second upsert needed
   }
 
   const label: React.CSSProperties = {
@@ -102,7 +102,7 @@ export function PropertyPanel() {
           style={inp}
           value={strokeValue}
           onChange={(e) => previewAll({ stroke: e.target.value })}
-          onBlur={(e) => batchCommit({ stroke: e.target.value })}
+          onBlur={(e) => batchCommit(selectedIds, { stroke: e.target.value })}
         />
       </div>
 
@@ -114,7 +114,7 @@ export function PropertyPanel() {
           style={inp}
           value={fillValue}
           onChange={(e) => previewAll({ fill: e.target.value })}
-          onBlur={(e) => batchCommit({ fill: e.target.value })}
+          onBlur={(e) => batchCommit(selectedIds, { fill: e.target.value })}
         />
       </div>
 
@@ -132,7 +132,7 @@ export function PropertyPanel() {
           value={strokeWidthValue}
           onChange={(e) => previewAll({ strokeWidth: Number(e.target.value) })}
           onPointerUp={(e) =>
-            batchCommit({
+            batchCommit(selectedIds, {
               strokeWidth: Number((e.target as HTMLInputElement).value),
             })
           }
@@ -154,12 +154,13 @@ export function PropertyPanel() {
           value={opacityValue}
           onChange={(e) => previewAll({ opacity: Number(e.target.value) })}
           onPointerUp={(e) =>
-            batchCommit({
+            batchCommit(selectedIds, {
               opacity: Number((e.target as HTMLInputElement).value),
             })
           }
         />
       </div>
+
       {/* Font size — text shapes only */}
       {allText && (
         <>
@@ -176,7 +177,7 @@ export function PropertyPanel() {
               value={fontSizeValue}
               onChange={(e) => previewAll({ fontSize: Number(e.target.value) })}
               onBlur={(e) =>
-                batchCommit({ fontSize: Number(e.target.value) })
+                batchCommit(selectedIds, { fontSize: Number(e.target.value) })
               }
             />
           </div>
@@ -188,7 +189,7 @@ export function PropertyPanel() {
               value={fontFamilyValue}
               onChange={(e) => {
                 previewAll({ fontFamily: e.target.value })
-                batchCommit({ fontFamily: e.target.value })
+                batchCommit(selectedIds, { fontFamily: e.target.value })
               }}
             >
               <option value="system-ui, sans-serif">System</option>
@@ -207,7 +208,7 @@ export function PropertyPanel() {
               onChange={(e) => {
                 const value: 'normal' | 'bold' = e.target.value === 'bold' ? 'bold' : 'normal'
                 previewAll({ fontWeight: value })
-                batchCommit({ fontWeight: value })
+                batchCommit(selectedIds, { fontWeight: value })
               }}
             >
               <option value="normal">Normal</option>
@@ -228,7 +229,7 @@ export function PropertyPanel() {
                   type="button"
                   onClick={() => {
                     previewAll({ textAlign: value })
-                    batchCommit({ textAlign: value })
+                    batchCommit(selectedIds, { textAlign: value })
                   }}
                   style={{
                     flex: 1,

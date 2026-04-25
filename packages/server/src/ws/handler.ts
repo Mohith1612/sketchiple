@@ -45,7 +45,7 @@ export function isAllowedWsOrigin(origin: string): boolean {
 export function attachWebSocketHandler(app: TemplatedApp): void {
   app.ws<UserData>('/ws/:roomId', {
     compression: 0,
-    maxPayloadLength: 16 * 1024 * 1024,
+    maxPayloadLength: 16 * 1024 * 1024, // 16 MB
     idleTimeout: 60,
 
     upgrade: (res, req, context) => {
@@ -67,7 +67,11 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       const userId = newId()
 
       res.upgrade<UserData>(
-        { roomId, userId, rateLimit: createWsRateLimitState() },
+        {
+          roomId,
+          userId,
+          rateLimit: createWsRateLimitState(),
+        },
         req.getHeader('sec-websocket-key'),
         req.getHeader('sec-websocket-protocol'),
         req.getHeader('sec-websocket-extensions'),
@@ -84,8 +88,10 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
 
       logger.info('ws open', { roomId, userId, clients: room.clientCount })
 
+      // Initiate sync handshake: send our state vector to the new client
       room.sendToClient(ws, protocol.encodeSyncStep1(room.doc))
 
+      // Send current awareness states so the new client sees existing cursors
       const awarenessStates = room.awareness.getStates()
       if (awarenessStates.size > 0) {
         const update = awarenessProtocol.encodeAwarenessUpdate(
@@ -97,8 +103,7 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
     },
 
     message: (ws, message, _isBinary) => {
-      // slice(0) creates an independent copy — uWS recycles the original buffer
-      // the moment this callback returns, so any deferred read would be garbage.
+      // MUST copy immediately — uWS recycles this buffer after the callback
       const data = new Uint8Array(message.slice(0))
 
       const { roomId, rateLimit } = ws.getUserData()
@@ -108,6 +113,8 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       if (!allowWsMessage(rateLimit)) {
         incCounter('ws_rate_limit_exceeded_total')
         logger.warn('ws message rate limit exceeded', { roomId, userId: ws.getUserData().userId })
+        // Drop the message but keep the connection — closing on first violation
+        // disconnects legitimate users during heavy editing sessions.
         return
       }
 
@@ -120,13 +127,6 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       }
     },
 
-    drain: (ws) => {
-      const { roomId } = ws.getUserData()
-      const room = roomManager.getRoom(roomId)
-      if (!room) return
-      room.handleDrain(ws)
-    },
-
     close: (ws, code, _message) => {
       const { roomId, userId } = ws.getUserData()
       const room = roomManager.getRoom(roomId)
@@ -136,11 +136,21 @@ export function attachWebSocketHandler(app: TemplatedApp): void {
       decGauge('ws_active_sockets', 1)
       logger.info('ws close', { roomId, userId, code, clients: room.clientCount })
 
+      // V1: drop the room doc when empty.
+      // Client IndexedDB is the persistence layer; the client with the most
+      // recent local state will push it up via syncStep2 on reconnect.
       if (room.isEmpty) {
         roomManager.deleteRoom(roomId)
       }
 
       setGauge('rooms_active', roomManager.size)
+    },
+
+    drain: (ws) => {
+      const { roomId } = ws.getUserData()
+      const room = roomManager.getRoom(roomId)
+      if (!room) return
+      room.handleDrain(ws)
     },
   })
 }

@@ -24,14 +24,6 @@ export function hitTestPoint(shape: Shape, wx: number, wy: number): boolean {
       return ((wx - cx) / rx) ** 2 + ((wy - cy) / ry) ** 2 <= 1
     }
 
-    case 'text':
-      return (
-        wx >= shape.x &&
-        wx <= shape.x + (shape.width || 200) &&
-        wy >= shape.y &&
-        wy <= shape.y + (shape.height || 40)
-      )
-
     case 'arrow': {
       const pts = shape.points
       if (!pts) return false
@@ -39,6 +31,15 @@ export function hitTestPoint(shape: Shape, wx: number, wy: number): boolean {
       const tolerance = shape.strokeWidth / 2 + 6
       return distPointToSegment(wx, wy, p0[0], p0[1], p1[0], p1[1]) <= tolerance
     }
+
+    case 'text':
+      // Use stored width/height (written at commit time by TextHandler)
+      return (
+        wx >= shape.x &&
+        wx <= shape.x + (shape.width || 200) &&
+        wy >= shape.y &&
+        wy <= shape.y + (shape.height || 40)
+      )
 
     case 'freehand': {
       const bb = getBoundingBox(shape)
@@ -52,6 +53,23 @@ export function hitTestPoint(shape: Shape, wx: number, wy: number): boolean {
       return false
     }
   }
+}
+
+/**
+ * Returns the topmost (visually last rendered) shape that contains the point.
+ * REVERSE iteration ensures shapes drawn on top win.
+ */
+export function hitTestShapes(
+  shapes: Record<string, Shape>,
+  wx: number,
+  wy: number,
+): Shape | null {
+  const all = Object.values(shapes)
+  for (let i = all.length - 1; i >= 0; i--) {
+    const shape = all[i]
+    if (shape && hitTestPoint(shape, wx, wy)) return shape
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +107,10 @@ export function hitTestHandle(
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Selection bounds
+// ---------------------------------------------------------------------------
+
 /** Combined AABB of multiple shapes. Returns null if the array is empty. */
 export function getSelectionBounds(
   shapes: Shape[],
@@ -104,8 +126,13 @@ export function getSelectionBounds(
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
+// ---------------------------------------------------------------------------
+// Rubber-band: shapes intersecting a world-space rectangle
+// ---------------------------------------------------------------------------
+
 /**
  * Returns shapes whose AABB INTERSECTS the query rectangle.
+ * (Not fully-contained — intersection is more ergonomic.)
  */
 export function shapesInRect(
   shapes: Record<string, Shape>,
@@ -114,6 +141,7 @@ export function shapesInRect(
   rw: number,
   rh: number,
 ): Shape[] {
+  // Normalise rect so width/height are always positive
   const x1 = rw >= 0 ? rx : rx + rw
   const y1 = rh >= 0 ? ry : ry + rh
   const x2 = x1 + Math.abs(rw)
@@ -126,9 +154,15 @@ export function shapesInRect(
   })
 }
 
+// ---------------------------------------------------------------------------
+// Resize anchor helper
+// ---------------------------------------------------------------------------
+
 /**
  * Returns the world-space coordinates of the fixed (opposite) corner when
  * dragging a resize handle.
+ *
+ * nw dragged → se is fixed, etc.
  */
 export function getResizeAnchor(
   shape: Shape,
@@ -142,6 +176,10 @@ export function getResizeAnchor(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Geometry helpers (exported for reuse)
+// ---------------------------------------------------------------------------
+
 export function distPointToSegment(
   px: number, py: number,
   ax: number, ay: number,
@@ -154,21 +192,3 @@ export function distPointToSegment(
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq))
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
 }
-
-/**
- * Returns the topmost (visually last rendered) shape that contains the point.
- * REVERSE iteration ensures shapes drawn on top win.
- */
-export function hitTestShapes(
-  shapes: Record<string, Shape>,
-  wx: number,
-  wy: number,
-): Shape | null {
-  const all = Object.values(shapes)
-  for (let i = all.length - 1; i >= 0; i--) {
-    const shape = all[i]
-    if (shape && hitTestPoint(shape, wx, wy)) return shape
-  }
-  return null
-}
-

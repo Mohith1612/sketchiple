@@ -31,19 +31,18 @@ import { updateShape, updateShapeLocal } from '../shapes/index.js'
 import { resolveArrowEndpoints, snapToShape } from '../shapes/arrowBinding.js'
 import { throttle, type ThrottledFn } from '../../lib/throttle.js'
 
+const MIN_SIZE = 10
+
+// Snap radii for hysteresis: larger exit radius prevents flicker at boundary
+const SNAP_RADIUS_IN  = 8   // px — engage snap on approach
+const SNAP_RADIUS_OUT = 12  // px — release snap only when pointer moves farther
+
 const HANDLE_CURSORS: Record<ResizeHandle, string> = {
   nw: 'nw-resize',
   ne: 'ne-resize',
   sw: 'sw-resize',
   se: 'se-resize',
 }
-
-
-const MIN_SIZE = 10
-
-// Snap radii for hysteresis: larger exit radius prevents flicker at boundary
-const SNAP_RADIUS_IN  = 8   // px — engage snap on approach
-const SNAP_RADIUS_OUT = 12  // px — release snap only when pointer moves farther
 
 // ---------------------------------------------------------------------------
 // Snap indicator — exported so CanvasRenderer can draw it (Layer 5)
@@ -57,32 +56,9 @@ export interface SnapIndicator {
 /** Current snap indicator. CanvasRenderer reads this each frame. */
 export let snapIndicator: SnapIndicator | null = null
 
-interface ArrowEndpointState {
-  shapeId: string
-  endpoint: 'from' | 'to'
-  /** Snap candidate from previous move (for hysteresis) */
-  lastSnap: ReturnType<typeof snapToShape>
-  throttledYjs: ThrottledFn<[string, Partial<Shape>]>
-}
-
-interface ResizeState {
-  handle: ResizeHandle
-  shapeId: string
-  ax: number
-  ay: number
-  origW: number
-  origH: number
-  throttledYjs: ThrottledFn<[string, Partial<Shape>]>
-}
-
-interface ResizeGroupState {
-  handle: ResizeHandle
-  ax: number
-  ay: number
-  initialGroupBBox: { x: number; y: number; width: number; height: number }
-  initialShapes: Map<string, { x: number; y: number; width: number; height: number }>
-  throttledYjs: ThrottledFn<[[string, Partial<Shape>][]]>
-}
+// ---------------------------------------------------------------------------
+// Interaction state machine
+// ---------------------------------------------------------------------------
 
 interface MoveState {
   startSx: number
@@ -96,6 +72,35 @@ interface MoveState {
   throttledYjs: ThrottledFn<[string, Partial<Shape>]>
 }
 
+interface ResizeState {
+  handle: ResizeHandle
+  shapeId: string
+  ax: number
+  ay: number
+  origW: number
+  origH: number
+  throttledYjs: ThrottledFn<[string, Partial<Shape>]>
+}
+
+interface ArrowEndpointState {
+  shapeId: string
+  endpoint: 'from' | 'to'
+  /** Snap candidate from previous move (for hysteresis) */
+  lastSnap: ReturnType<typeof snapToShape>
+  throttledYjs: ThrottledFn<[string, Partial<Shape>]>
+}
+
+interface ResizeGroupState {
+  handle: ResizeHandle
+  /** Fixed anchor (world-space) — opposite corner of the group bbox */
+  ax: number
+  ay: number
+  initialGroupBBox: { x: number; y: number; width: number; height: number }
+  /** Per-shape original bounds for proportional scaling */
+  initialShapes: Map<string, { x: number; y: number; width: number; height: number }>
+  throttledYjs: ThrottledFn<[[string, Partial<Shape>][]]>
+}
+
 type Interaction =
   | { type: 'idle' }
   | { type: 'move';           state: MoveState }
@@ -103,6 +108,10 @@ type Interaction =
   | { type: 'resize-group';   state: ResizeGroupState }
   | { type: 'arrow-endpoint'; state: ArrowEndpointState }
   | { type: 'rubber-band';    startWx: number; startWy: number }
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
 
 export function createSelectionHandlers(
   canvas: HTMLCanvasElement,
@@ -120,6 +129,9 @@ export function createSelectionHandlers(
     canvas.style.cursor = c
   }
 
+  // -------------------------------------------------------------------------
+  // pointerdown
+  // -------------------------------------------------------------------------
   function onPointerDown(e: PointerEvent) {
     if (useUiStore.getState().activeTool !== 'select') return
     e.preventDefault()
@@ -281,8 +293,12 @@ export function createSelectionHandlers(
     requestRender()
   }
 
+  // -------------------------------------------------------------------------
+  // pointermove
+  // -------------------------------------------------------------------------
   function onPointerMove(e: PointerEvent) {
     if (useUiStore.getState().activeTool !== 'select') return
+
     const { sx, sy } = getScreenPos(e)
     const { screenToWorld, viewport: vp } = useUiStore.getState()
 
@@ -366,6 +382,7 @@ export function createSelectionHandlers(
         : [p0, [wx, wy]]
 
       // Instant local render — visually detach from bound shape while dragging
+      // Object.assign bypasses exactOptionalPropertyTypes when clearing optional fields
       const localPatch: Partial<Shape> = { points: newPoints }
       if (st.endpoint === 'from') Object.assign(localPatch, { fromShapeId: undefined, fromAnchor: undefined })
       else Object.assign(localPatch, { toShapeId: undefined, toAnchor: undefined })
@@ -386,7 +403,7 @@ export function createSelectionHandlers(
       return
     }
 
-    // --- Rubber-band ---
+    // --- Rubber-band (throttled ~60fps) ---
     if (interaction.type === 'rubber-band') {
       const { rubberBand } = useSelectionStore.getState()
       if (rubberBand) {
@@ -444,11 +461,14 @@ export function createSelectionHandlers(
     setCursor(hit ? 'move' : 'default')
   }
 
+  // -------------------------------------------------------------------------
+  // pointerup
+  // -------------------------------------------------------------------------
   function onPointerUp(e: PointerEvent) {
     if (useUiStore.getState().activeTool !== 'select') return
 
     const { sx, sy } = getScreenPos(e)
-    const { screenToWorld } = useUiStore.getState()
+    const { screenToWorld, viewport: vp } = useUiStore.getState()
 
     if (interaction.type === 'rubber-band') {
       const { rubberBand } = useSelectionStore.getState()
@@ -461,6 +481,15 @@ export function createSelectionHandlers(
         useSelectionStore.getState().selectMany(hits.map((s) => s.id))
         useSelectionStore.getState().setRubberBand(null)
       }
+    }
+
+    if (interaction.type === 'resize') {
+      const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const finalPatch = applyResize(handle, ax, ay, origW, origH, wx, wy, e.shiftKey)
+      throttledYjs.flush()
+      throttledYjs.cancel()
+      updateShape(shapeId, finalPatch)
     }
 
     if (interaction.type === 'resize-group') {
@@ -481,15 +510,6 @@ export function createSelectionHandlers(
       }
     }
 
-    if (interaction.type === 'resize') {
-      const { handle, shapeId, ax, ay, origW, origH, throttledYjs } = interaction.state
-      const { x: wx, y: wy } = screenToWorld(sx, sy)
-      const finalPatch = applyResize(handle, ax, ay, origW, origH, wx, wy, e.shiftKey)
-      throttledYjs.flush()
-      throttledYjs.cancel()
-      updateShape(shapeId, finalPatch)
-    }
-
     if (interaction.type === 'move') {
       const { throttledYjs } = interaction.state
       throttledYjs.flush()
@@ -499,7 +519,6 @@ export function createSelectionHandlers(
     if (interaction.type === 'arrow-endpoint') {
       const st = interaction.state
       const { x: wx, y: wy } = screenToWorld(sx, sy)
-      const { viewport: vp } = useUiStore.getState()
       const { shapes } = useShapeStore.getState()
       const arrow = shapes[st.shapeId]
 
@@ -552,48 +571,6 @@ export function createSelectionHandlers(
 }
 
 // ---------------------------------------------------------------------------
-// Group resize helpers
-// ---------------------------------------------------------------------------
-
-function computeGroupBBox(
-  ids: Set<string>,
-  shapes: Record<string, Shape>,
-): { x: number; y: number; width: number; height: number } | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  let count = 0
-  for (const id of ids) {
-    const s = shapes[id]
-    if (!s || s.type === 'arrow' || s.type === 'text' || s.type === 'freehand') continue
-    minX = Math.min(minX, s.x);       minY = Math.min(minY, s.y)
-    maxX = Math.max(maxX, s.x + s.width); maxY = Math.max(maxY, s.y + s.height)
-    count++
-  }
-  if (count < 2 || !isFinite(minX)) return null
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-}
-
-function hitTestGroupHandle(
-  bbox: { x: number; y: number; width: number; height: number },
-  sx: number,
-  sy: number,
-  vp: { zoom: number; offsetX: number; offsetY: number },
-): ResizeHandle | null {
-  const { zoom, offsetX, offsetY } = vp
-  const corners: [ResizeHandle, number, number][] = [
-    ['nw', bbox.x,              bbox.y              ],
-    ['ne', bbox.x + bbox.width, bbox.y              ],
-    ['sw', bbox.x,              bbox.y + bbox.height ],
-    ['se', bbox.x + bbox.width, bbox.y + bbox.height ],
-  ]
-  for (const [handle, wx, wy] of corners) {
-    const hsx = wx * zoom + offsetX
-    const hsy = wy * zoom + offsetY
-    if (Math.abs(sx - hsx) <= 6 && Math.abs(sy - hsy) <= 6) return handle
-  }
-  return null
-}
-
-// ---------------------------------------------------------------------------
 // Resize math — no-flip + min-size + optional aspect-ratio lock
 // ---------------------------------------------------------------------------
 
@@ -637,6 +614,56 @@ function applyResize(
   }
 
   return { x: newX, y: newY, width: newW, height: newH }
+}
+
+// ---------------------------------------------------------------------------
+// Group resize helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the combined AABB of all resizable (rect/ellipse) shapes in the set.
+ * Returns null if fewer than 2 resizable shapes are present.
+ */
+function computeGroupBBox(
+  ids: Set<string>,
+  shapes: Record<string, Shape>,
+): { x: number; y: number; width: number; height: number } | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  let count = 0
+  for (const id of ids) {
+    const s = shapes[id]
+    if (!s || s.type === 'arrow' || s.type === 'text' || s.type === 'freehand') continue
+    minX = Math.min(minX, s.x);       minY = Math.min(minY, s.y)
+    maxX = Math.max(maxX, s.x + s.width); maxY = Math.max(maxY, s.y + s.height)
+    count++
+  }
+  if (count < 2 || !isFinite(minX)) return null
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+/**
+ * Screen-space hit test against the 4 corner handles of an arbitrary bbox.
+ * Same 6px radius as hitTestHandle.
+ */
+function hitTestGroupHandle(
+  bbox: { x: number; y: number; width: number; height: number },
+  sx: number,
+  sy: number,
+  vp: { zoom: number; offsetX: number; offsetY: number },
+): ResizeHandle | null {
+  const { zoom, offsetX, offsetY } = vp
+  const corners: [ResizeHandle, number, number][] = [
+    ['nw', bbox.x,              bbox.y              ],
+    ['ne', bbox.x + bbox.width, bbox.y              ],
+    ['sw', bbox.x,              bbox.y + bbox.height ],
+    ['se', bbox.x + bbox.width, bbox.y + bbox.height ],
+  ]
+  for (const [handle, wx, wy] of corners) {
+    const hsx = wx * zoom + offsetX
+    const hsy = wy * zoom + offsetY
+    if (Math.abs(sx - hsx) <= 6 && Math.abs(sy - hsy) <= 6) return handle
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------

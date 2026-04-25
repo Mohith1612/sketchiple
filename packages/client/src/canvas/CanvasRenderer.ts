@@ -6,18 +6,18 @@
  * that are being moved by remote peers, eliminating discrete-update jitter.
  * Local shapes always render at exact position.
  */
-import { renderShape, invalidateFreehandPath } from '../features/shapes/ShapeRenderer.js'
-import { renderDraft } from '../features/drawing/DraftRenderer.js'
-import { renderSelectionOverlay } from '../features/selection/SelectionRenderer.js'
+import { renderShape, invalidateFreehandPath } from '../features/shapes/index.js'
+import { renderDraft } from '../features/drawing/index.js'
+import { renderSelectionOverlay } from '../features/selection/index.js'
 import { useShapeStore } from '../store/shapeStore.js'
 import { useUiStore } from '../store/uiStore.js'
 import { usePresenceStore } from '../store/presenceStore.js'
 import { useSelectionStore } from '../features/selection/selectionStore.js'
-import { getBoundingBox } from '../lib/boundingBox.js'
 import type { DraftShape } from '../features/drawing/DrawingHandler.js'
 import type { Shape } from '@canvas-draw/shared'
 // snapIndicator is a mutable export updated by SelectionHandler during arrow endpoint drags
 import { snapIndicator } from '../features/selection/SelectionHandler.js'
+import { getBoundingBox } from '../lib/boundingBox.js'
 
 // ---------------------------------------------------------------------------
 // Remote lerp state — module-level, never goes in Zustand
@@ -97,6 +97,8 @@ export function clearRemoteLerpPos(id: string): void {
 
 /** Mark a shape as being updated remotely so lerp kicks in next frame. */
 export function markRemoteUpdate(id: string, x: number, y: number): void {
+  // Only set entry if shape is already tracked (already visible) to avoid
+  // lerping shapes that just appeared — those should snap to position.
   if (_remotePos.has(id)) {
     _remotePos.set(id, { x, y })
   } else {
@@ -114,6 +116,10 @@ function lerpRemoteShape(shape: Shape): Shape {
   _remotePos.set(shape.id, { x: lx, y: ly })
   return { ...shape, x: lx, y: ly }
 }
+
+// ---------------------------------------------------------------------------
+// Main render
+// ---------------------------------------------------------------------------
 
 export function renderScene(ctx: CanvasRenderingContext2D, draft: DraftShape | null): void {
   const { shapes } = useShapeStore.getState()
@@ -221,6 +227,10 @@ function renderRemoteCursors(
   ctx.restore()
 }
 
+// ---------------------------------------------------------------------------
+// Viewport culling
+// ---------------------------------------------------------------------------
+
 function isShapeVisible(
   shape: Shape,
   zoom: number,
@@ -230,6 +240,7 @@ function isShapeVisible(
   canvasH: number,
 ): boolean {
   const bbox = getBoundingBox(shape)
+  // Inflate bbox by strokeWidth to catch thin shapes (arrows, freehand) near viewport edge
   const inflate = Math.max(20, (shape.strokeWidth ?? 2) * 2)
   const sx = (bbox.x - inflate) * zoom + offsetX
   const sy = (bbox.y - inflate) * zoom + offsetY
