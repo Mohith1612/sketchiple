@@ -117,40 +117,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-frontend:
-    name: Deploy Frontend to Cloudflare Pages
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [security, quality]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Build client
-        run: pnpm -r build
-        env:
-          VITE_WS_URL: wss://canvas-ws.mohith16.com
-          VITE_WS_MAX_RETRIES: "20"
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy packages/client/dist --project-name=sketchiple --branch=main
-
   deploy-backend:
     name: Deploy Backend to Oracle VM
     runs-on: ubuntu-latest
