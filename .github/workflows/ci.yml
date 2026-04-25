@@ -143,5 +143,5 @@ jobs:
 
             echo "==> Health check"
             sleep 5
-            docker exec sketchiple_server wget -qO- http://localhost:3001/health | grep '"ok":true'
+            docker exec sketchiple_server curl -sf http://localhost:3001/health | grep '"ok":true'
             echo "Deploy complete."
