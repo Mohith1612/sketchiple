@@ -1,0 +1,9 @@
+node_modules
+packages/client
+packages/*/node_modules
+packages/*/dist
+packages/*/coverage
+.github
+tests
+*.md
+.env*

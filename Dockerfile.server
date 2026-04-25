@@ -1,0 +1,29 @@
+FROM node:20-alpine AS deps
+
+RUN npm install -g pnpm@10
+
+WORKDIR /app
+
+# Copy workspace manifests first for layer caching
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages/shared/package.json  packages/shared/package.json
+COPY packages/server/package.json  packages/server/package.json
+
+# pnpm selects the linux/arm64 uWebSockets.js prebuilt binary automatically
+# based on the container platform (set via --platform linux/arm64 in buildx).
+# Do NOT use --prod: tsx is in devDependencies and is the runtime entrypoint.
+RUN pnpm install --frozen-lockfile
+
+# Copy source after dependencies to maximise cache hits
+COPY packages/shared/ packages/shared/
+COPY packages/server/ packages/server/
+
+ENV NODE_ENV=production
+ENV PORT=3001
+
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3001/health || exit 1
+
+CMD ["node_modules/.bin/tsx", "packages/server/src/server.ts"]
