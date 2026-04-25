@@ -89,7 +89,6 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for quality gates and PR checkl
 
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Rollback runbook](docs/ROLLBACK_RUNBOOK.md)
-- [Phase 4 performance/scale plan](docs/PHASE4_PERFORMANCE_SCALE_PLAN.md)
 
 ## Security
 
