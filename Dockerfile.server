@@ -1,6 +1,6 @@
 FROM node:20-alpine AS deps
 
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@10 tsx
 
 WORKDIR /app
 
@@ -26,4 +26,4 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3001/health || exit 1
 
-CMD ["node_modules/.bin/tsx", "packages/server/src/server.ts"]
+CMD ["tsx", "packages/server/src/server.ts"]
