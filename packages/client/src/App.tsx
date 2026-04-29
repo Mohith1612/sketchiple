@@ -30,6 +30,7 @@ import { Minimap } from './features/minimap/index.js'
 import { useShapeStore } from './store/shapeStore.js'
 import { ydoc, getShapesMap } from './crdt/doc.js'
 import type { Shape } from '@canvas-draw/shared'
+import { WelcomeScreen } from './features/onboarding/WelcomeScreen.js'
 
 function getRoomId(): string {
   const hash = window.location.hash.slice(1)
@@ -68,6 +69,16 @@ export function App() {
 
   // Copy-link feedback
   const [copied, setCopied] = useState(false)
+
+  // Welcome screen — shown on first visit, persisted via localStorage
+  const [showWelcome, setShowWelcome] = useState(
+    () => localStorage.getItem('canvas-draw:welcomed') !== 'true'
+  )
+
+  function dismissWelcome() {
+    localStorage.setItem('canvas-draw:welcomed', 'true')
+    setShowWelcome(false)
+  }
 
   draftRef.current = draft
 
@@ -304,6 +315,16 @@ export function App() {
     }
   }, [])
 
+  // Dismiss welcome screen on first canvas interaction
+  useEffect(() => {
+    if (!showWelcome) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const handler = () => dismissWelcome()
+    canvas.addEventListener('pointerdown', handler, { once: true, capture: true })
+    return () => canvas.removeEventListener('pointerdown', handler, true)
+  }, [showWelcome])
+
   function copyRoomLink() {
     navigator.clipboard.writeText(window.location.href).catch(console.error)
     setCopied(true)
@@ -523,6 +544,12 @@ export function App() {
         <button onClick={copyRoomLink} style={copied ? { ...btnBase, color: '#16a34a' } : btnBase}>
           {copied ? '✓ Copied!' : '⎘ Share'}
         </button>
+
+        {divider}
+
+        <button onClick={() => setShowWelcome(true)} style={btnBase} title="Show help">
+          ? Help
+        </button>
       </div>
 
       {/* Canvas */}
@@ -550,6 +577,9 @@ export function App() {
 
       {/* Dev debug panel */}
       {import.meta.env.DEV && <DebugPanel />}
+
+      {/* Welcome / onboarding overlay */}
+      {showWelcome && <WelcomeScreen onDismiss={dismissWelcome} />}
     </div>
   )
 }
